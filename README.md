@@ -14,7 +14,7 @@ Xây dựng ứng dụng sử dụng **Transfer Learning với MobileNetV2** k�
 
 Bản `fruits-360_100x100` (ảnh 100x100) có dung lượng nhẹ hơn bản gốc (100MB vs ~1GB), phù hợp với máy cá nhân có CPU Intel Core i5, RAM 16GB, không có GPU NVIDIA.
 
-## 15 Class su dung
+## 15 Lớp sử dụng
 
 | STT | Class       | Tên tiếng Việt |
 |-----|-------------|----------------|
@@ -34,7 +34,7 @@ Bản `fruits-360_100x100` (ảnh 100x100) có dung lượng nhẹ hơn bản g�
 | 14  | Strawberry  | Dâu tây        |
 | 15  | Watermelon  | Dưa hấu        |
 
-## Cong nghe su dung
+## Công nghệ sử dụng
 
 | Công nghệ | Mục đích |
 |-----------|----------|
@@ -47,7 +47,7 @@ Bản `fruits-360_100x100` (ảnh 100x100) có dung lượng nhẹ hơn bản g�
 | **Matplotlib + Seaborn** | Trực quan hóa dữ liệu |
 | **Scikit-learn** | Đánh giá mô hình (metrics) |
 
-## Cau truc thu muc
+## Cấu trúc thư mục
 
 ```
 fruit_augmentation_classification/
@@ -112,9 +112,21 @@ fruit_augmentation_classification/
 └── README.md                     <-- File này
 ```
 
+## Mô tả các file Python
+
+| File | Chức năng |
+|------|-----------|
+| `config.py` | File cấu hình trung tâm: đường dẫn, tham số huấn luyện, danh sách class, cấu hình augmentation |
+| `prepare_dataset.py` | Đọc dataset gốc từ `fruits-360_100x100/`, chọn 15 class, copy vào `dataset/selected/`, chia train/val/test |
+| `train_model.py` | Xây dựng mô hình MobileNetV2 Transfer Learning, huấn luyện 2 pha, lưu model và biểu đồ |
+| `evaluate_model.py` | Đánh giá mô hình trên tập test: accuracy, confusion matrix, precision/recall/F1 từng class |
+| `predict.py` | Dự đoán 1 ảnh đơn lẻ từ dòng lệnh, in kết quả chi tiết |
+| `augment_preview.py` | Tạo ảnh so sánh: 1 ảnh gốc + 5 ảnh augmentation, lưu vào `results/` |
+| `app.py` | Ứng dụng Streamlit 4 tab: phân loại ảnh, tăng cường dữ liệu, kết quả mô hình, thông tin hệ thống |
+
 ---
 
-## Huong dan chay tung buoc
+## Hướng dẫn chạy từng bước
 
 ### Điều kiện tiên quyết
 
@@ -304,6 +316,21 @@ Output: Xác suất 15 class
 - **Phase 1**: Chỉ các lớp Dense mới được huấn luyện. Base MobileNetV2 hoạt động như "máy ảnh thông minh" trích xuất đặc trưng.
 - **Phase 2**: Mở khóa 25% lớp cuối của MobileNetV2, huấn luyện với learning rate rất thấp (0.0001) để thích nghi đặc trưng với ảnh trái cây.
 
+### Thông số huấn luyện
+
+| Tham số | Giá trị | Ghi chú |
+|---------|---------|---------|
+| Kích thước ảnh đầu vào | 160×160 pixels | Upscale từ 100×100 |
+| Batch size | 32 | |
+| Phase 1 epochs | 25 | Có EarlyStopping (patience=5) |
+| Phase 2 epochs | 7 | Có EarlyStopping (patience=5) |
+| Optimizer | Adam | Phase 1: lr=0.001, Phase 2: lr=0.0001 |
+| Dropout | 0.4 | Trên classification head |
+| Fine-tune layers | 25% lớp cuối | ~40 lớp được mở khóa |
+| Số lớp | 15 | Apple, Avocado, Banana, Blueberry, Cherry, Grape, Kiwi, Lemon, Mango, Orange, Peach, Pear, Pineapple, Strawberry, Watermelon |
+| Ảnh/class | Tối đa 400 | Train 70% (~280 ảnh), Validation 30% (~120 ảnh) |
+| Thời gian huấn luyện | ~30-40 phút | Trên CPU i5-13500H, 16GB RAM |
+
 ---
 
 ## Các chỉ số đánh giá
@@ -381,23 +408,23 @@ Mô hình đạt **68.28%** accuracy trên tập test (5034 ảnh).
 
 ### Chi tiết từng lớp
 
-| Class | Precision | Recall | F1-score |
-|-------|-----------|--------|----------|
-| Kiwi | 1.00 | 1.00 | 1.00 |
-| Strawberry | 0.99 | 1.00 | 0.99 |
-| Pineapple | 1.00 | 0.97 | 0.99 |
-| Watermelon | 0.96 | 1.00 | 0.98 |
-| Avocado | 0.96 | 0.99 | 0.97 |
-| Blueberry | 0.98 | 0.97 | 0.97 |
-| Banana | 1.00 | 0.66 | 0.80 |
-| Mango | 0.78 | 0.66 | 0.72 |
-| Pear | 0.54 | 0.74 | 0.63 |
-| Grape | 0.83 | 0.45 | 0.59 |
-| Lemon | 0.41 | 0.83 | 0.55 |
-| Orange | 0.74 | 0.40 | 0.52 |
-| Cherry | 0.46 | 0.43 | 0.44 |
-| Apple | 0.40 | 0.37 | 0.38 |
-| Peach | 0.31 | 0.41 | 0.35 |
+| Class | Precision | Recall | F1-score | Support |
+|-------|-----------|--------|----------|---------|
+| Kiwi | 1.00 | 1.00 | 1.00 | 156 |
+| Strawberry | 0.99 | 1.00 | 0.99 | 400 |
+| Pineapple | 1.00 | 0.97 | 0.99 | 329 |
+| Watermelon | 0.96 | 1.00 | 0.98 | 157 |
+| Avocado | 0.96 | 0.99 | 0.97 | 400 |
+| Blueberry | 0.98 | 0.97 | 0.97 | 154 |
+| Banana | 1.00 | 0.66 | 0.80 | 400 |
+| Mango | 0.78 | 0.66 | 0.72 | 308 |
+| Pear | 0.54 | 0.74 | 0.63 | 400 |
+| Grape | 0.83 | 0.45 | 0.59 | 400 |
+| Lemon | 0.41 | 0.83 | 0.55 | 330 |
+| Orange | 0.74 | 0.40 | 0.52 | 400 |
+| Cherry | 0.46 | 0.43 | 0.44 | 400 |
+| Apple | 0.40 | 0.37 | 0.38 | 400 |
+| Peach | 0.31 | 0.41 | 0.35 | 400 |
 
 ### Nhận xét
 
@@ -409,29 +436,25 @@ Mô hình đạt **68.28%** accuracy trên tập test (5034 ảnh).
 
 ## Hướng dẫn sử dụng cho nhóm (GitHub)
 
-### Thành viên nhóm clone project về máy
+### Thành viên clone project về máy (3 bước)
 
 ```bash
 # 1. Clone repository
-git clone <url-repository>
+git clone https://github.com/Thanh-Bo/fruit-augmentation.git
 cd fruit_augmentation_classification
 
-# 2. Tải dataset từ Kaggle
-#    Link: https://www.kaggle.com/moltean/fruits
-#    Tải bản fruits-360_100x100, giải nén vào thư mục project
+# 2. Tải dataset Fruits-360_100x100 từ Kaggle:
+#    https://www.kaggle.com/moltean/fruits
+#    Giải nén vào thư mục project.
 #    Kết quả: fruits-360_100x100/fruits-360/Training/ và Test/
 
-# 3. Cài thư viện
+# 3. Cài đặt + chuẩn bị + chạy
 pip install -r requirements.txt
-
-# 4. Chuẩn bị dataset (tạo thư mục dataset/ từ raw data)
 python prepare_dataset.py
-
-# 5. Chạy ứng dụng (mô hình đã được huấn luyện sẵn)
 streamlit run app.py
 ```
 
-**Không cần huấn luyện lại** — file `model/fruit_cnn_model.h5` đã có sẵn trong repository.
+**Không cần huấn luyện lại** — file `model/fruit_cnn_model.h5` (~15MB) đã có sẵn trong repository.
 
 ### Các file/thư mục không có trong Git (.gitignore)
 
@@ -441,6 +464,17 @@ streamlit run app.py
 | `dataset/` | Sinh ra từ `prepare_dataset.py`, không cần push |
 | `__pycache__/`, `*.pyc` | Cache Python |
 
+### Khắc phục lỗi thường gặp
+
+| Lỗi | Nguyên nhân | Cách sửa |
+|-----|------------|----------|
+| `No module named 'tensorflow'` | Chưa cài thư viện | `pip install -r requirements.txt` |
+| `Không tìm thấy thư mục Training/` | Dataset chưa giải nén đúng vị trí | Kiểm tra `fruits-360_100x100/fruits-360/Training/` tồn tại |
+| `Không tìm thấy folder cho class X` | Tên folder trong dataset khác `SOURCE_FOLDERS` | Mở `config.py`, sửa `SOURCE_FOLDERS` khớp với tên thực tế |
+| `Model không load được` | Thiếu file `model/fruit_cnn_model.h5` | Clone lại repo hoặc chạy `python train_model.py` |
+| `Streamlit báo use_container_width deprecated` | Phiên bản Streamlit mới | Cảnh báo, không ảnh hưởng chức năng |
+| Python 3.12+ không cài được TensorFlow | TensorFlow chưa hỗ trợ Python 3.12 | Dùng Python 3.10-3.11, hoặc `pip install tensorflow==2.16.1` |
+
 ---
 
 **Môn học:** Khai phá dữ liệu
@@ -448,3 +482,5 @@ streamlit run app.py
 **Dataset:** [Fruits-360](https://www.kaggle.com/moltean/fruits)
 
 **Framework:** TensorFlow/Keras + Streamlit
+
+---
