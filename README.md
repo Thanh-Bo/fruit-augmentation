@@ -444,7 +444,7 @@ git clone https://github.com/Thanh-Bo/fruit-augmentation.git
 cd fruit_augmentation_classification
 
 # 2. Tải dataset Fruits-360_100x100 từ Kaggle:
-#    https://www.kaggle.com/moltean/fruits
+#     
 #    Giải nén vào thư mục project.
 #    Kết quả: fruits-360_100x100/fruits-360/Training/ và Test/
 
