@@ -39,24 +39,24 @@ Dữ liệu trong project đi qua **5 giai đoạn chính**, mỗi giai đoạn 
 |------|------|-------|
 | 1 | `check_raw_dataset()` | Kiểm tra `Training/` và `Test/` có tồn tại không |
 | 2 | `clean_directories()` | Xóa toàn bộ `dataset/selected/`, `dataset/train/`, `dataset/validation/`, `dataset/test/` cũ (dùng `shutil.rmtree`) để tránh trùng lặp |
-| 3 | `copy_images_to_selected()` | Duyệt từng class → duyệt từng folder nguồn → copy tối đa `MAX_IMAGES_PER_CLASS` (400) ảnh từ **chỉ Training gốc** vào `dataset/selected/<class_name>/` |
-| 4 | `split_train_validation()` | Với mỗi class trong `selected/`, đọc danh sách ảnh → `random.shuffle(images)` với `seed=42` → chia 70% vào `train/`, 30% vào `validation/` |
-| 5 | `copy_test_from_raw()` | Copy ảnh từ **Test gốc** (KHÔNG từ Training) vào `dataset/test/<class_name>/`, cũng tối đa 400 ảnh/class |
+| 3 | `copy_images_to_selected()` | Duyệt từng class → duyệt từng folder nguồn → shuffle ảnh trong từng folder → chia đều quota `MAX_IMAGES_PER_CLASS` (1000) cho các folder biến thể → copy vào `dataset/selected/<class_name>/`. Folder nào thiếu thì phân bổ phần còn lại cho folder dư. |
+| 4 | `split_train_validation()` | Với mỗi class trong `selected/`, đọc danh sách ảnh → `random.shuffle(images)` với `seed=42` → chia 80% vào `train/`, 20% vào `validation/` |
+| 5 | `copy_test_from_raw()` | Copy ảnh từ **Test gốc** (KHÔNG từ Training) vào `dataset/test/<class_name>/`, cũng tối đa 1000 ảnh/class, chia đều giữa các folder biến thể |
 
 **Đầu ra:**
 ```
 dataset/
-├── selected/Apple/       (400 ảnh, từ Training gốc)
-├── selected/Avocado/     (400 ảnh)
+├── selected/Apple/       (1000 ảnh, từ Training gốc, cân bằng folder biến thể)
+├── selected/Avocado/     (1000 ảnh)
 ├── ...
-├── train/Apple/          (~280 ảnh = 70% của 400)
-├── train/Avocado/        (~280 ảnh)
+├── train/Apple/          (~800 ảnh = 80% của 1000)
+├── train/Avocado/        (~800 ảnh)
 ├── ...
-├── validation/Apple/     (~120 ảnh = 30% của 400)
-├── validation/Avocado/   (~120 ảnh)
+├── validation/Apple/     (~200 ảnh = 20% của 1000)
+├── validation/Avocado/   (~200 ảnh)
 ├── ...
-├── test/Apple/           (tối đa 400 ảnh, từ Test gốc)
-├── test/Avocado/         (tối đa 400 ảnh, từ Test gốc)
+├── test/Apple/           (tối đa 1000 ảnh, từ Test gốc, cân bằng folder)
+├── test/Avocado/         (tối đa 1000 ảnh, từ Test gốc, cân bằng folder)
 └── ...
 ```
 
@@ -111,8 +111,8 @@ Code dùng `ImageDataGenerator.flow_from_directory()` của Keras — đây là 
 # Trong train_model.py, hàm create_data_generators()
 train_generator = train_datagen.flow_from_directory(
     TRAIN_DIR,                          # Thư mục gốc chứa các subfolder theo class
-    target_size=(IMG_SIZE, IMG_SIZE),   # Resize ảnh về 160x160
-    batch_size=BATCH_SIZE,              # 32 ảnh/batch
+    target_size=(IMG_SIZE, IMG_SIZE),   # Resize ảnh về 224x224
+    batch_size=BATCH_SIZE,              # 16 ảnh/batch
     class_mode='categorical',           # Nhãn dạng one-hot (15 chiều)
     shuffle=True,                       # Xáo trộn sau mỗi epoch
     color_mode='rgb'                    # Đảm bảo 3 kênh màu
@@ -140,16 +140,16 @@ Augmentation **chỉ áp dụng cho tập train**, KHÔNG áp dụng cho validat
 
 Code nằm trong `build_mobilenetv2_model()`. Các bước:
 
-1. **Load base model không có top:** `MobileNetV2(weights='imagenet', include_top=False, input_shape=(160, 160, 3), alpha=1.0)`
+1. **Load base model không có top:** `MobileNetV2(weights='imagenet', include_top=False, input_shape=(224, 224, 3), alpha=1.0)`
    - `weights='imagenet'` → tải权重 đã huấn luyện trên ImageNet (1.4 triệu ảnh, 1000 class)
    - `include_top=False` → bỏ phần Dense + Softmax cuối cùng (chỉ giữ phần CNN trích xuất đặc trưng)
-   - `alpha=1.0` → dùng MobileNetV2 kích thước chuẩn (không thu nhỏ)
+   - `input_shape=(224, 224, 3)` → ảnh đầu vào 224×224 pixels (chuẩn ImageNet)
 
 2. **Đóng băng toàn bộ base:** `base_model.trainable = False` — không layer nào trong MobileNetV2 được cập nhật ở phase 1
 
 3. **Thêm classification head mới:**
    ```
-   Input(160, 160, 3)
+   Input(224, 224, 3)
      → MobileNetV2 (frozen, training=False)
      → GlobalAveragePooling2D
      → Dense(128, relu)
@@ -181,7 +181,7 @@ Adam (Adaptive Moment Estimation) kết hợp 2 ý tưởng:
 
 Trong code:
 - **Phase 1:** `Adam(learning_rate=0.001)` — learning rate cao vì head mới được khởi tạo ngẫu nhiên, cần học nhanh
-- **Phase 2:** `Adam(learning_rate=0.0001)` — learning rate thấp hơn 10 lần vì base đã được huấn luyện trên ImageNet, chỉ cần điều chỉnh nhẹ
+- **Phase 2:** `Adam(learning_rate=0.00003)` — learning rate rất thấp vì base đã được huấn luyện trên ImageNet, chỉ cần điều chỉnh rất nhẹ để tránh catastrophic forgetting
 
 ### 2.6 Callback — tác dụng thực tế
 
@@ -199,20 +199,20 @@ Trong code:
 - Chỉ ~130K tham số mới (trong Dense + Softmax) được huấn luyện
 - Base model chỉ đóng vai trò "máy trích xuất đặc trưng cố định"
 - Mỗi ảnh đi qua MobileNetV2 → nhận được 1 vector đặc trưng 1280 chiều (từ layer cuối của base) → vector này đi qua Dense(128) → Softmax(15)
-- Tối đa 25 epoch, nhưng EarlyStopping thường dừng sớm hơn
+- Tối đa 20 epoch, nhưng EarlyStopping thường dừng sớm hơn
 
 **Phase 2: Fine-tune một phần Base Model**
 
 - `base_model.trainable = True` → mở khóa toàn bộ base
-- Nhưng sau đó **đóng băng lại 75% lớp đầu tiên**:
+- Nhưng sau đó **đóng băng lại 65% lớp đầu tiên**:
   ```python
-  fine_tune_at = int(len(base_model.layers) * 0.75)  # ~115/154 lớp bị đóng băng
+  fine_tune_at = int(len(base_model.layers) * (1 - FINE_TUNE_RATIO))  # ~100/154 lớp bị đóng băng
   for layer in base_model.layers[:fine_tune_at]:
       layer.trainable = False
   ```
-  → Chỉ ~39 lớp cuối của MobileNetV2 được phép cập nhật
-- Compile lại với `Adam(lr=0.0001)` (thấp hơn 10 lần)
-- Tối đa 7 epoch
+  → Chỉ ~54 lớp cuối của MobileNetV2 được phép cập nhật (35%)
+- Compile lại với `Adam(lr=0.00003)` (thấp hơn ~33 lần)
+- Tối đa 10 epoch
 
 ---
 
@@ -222,11 +222,11 @@ Trong code:
 
 ```python
 inputs = Input(shape=(IMG_SIZE, IMG_SIZE, 3), name='input')
-# IMG_SIZE = 160 (từ config.py)
+# IMG_SIZE = 224 (từ config.py)
 # 3 = RGB (3 kênh màu)
 ```
 
-Mỗi ảnh đầu vào có kích thước **160×160 pixels, 3 kênh màu RGB**. Giá trị pixel sau `preprocess_input` nằm trong khoảng **[-1, 1]**.
+Mỗi ảnh đầu vào có kích thước **224×224 pixels, 3 kênh màu RGB**. Giá trị pixel sau `preprocess_input` nằm trong khoảng **[-1, 1]**.
 
 ### 3.2 MobileNetV2 Base
 
@@ -234,7 +234,7 @@ Mỗi ảnh đầu vào có kích thước **160×160 pixels, 3 kênh màu RGB**
 base_model = MobileNetV2(
     weights='imagenet',
     include_top=False,
-    input_shape=(160, 160, 3),
+    input_shape=(224, 224, 3),
     alpha=1.0
 )
 x = base_model(inputs, training=False)  # training=False để dùng BatchNorm ở chế độ inference
@@ -248,8 +248,8 @@ MobileNetV2 dùng **depthwise separable convolution** và **inverted residual bl
 
 - **ReLU6:** Dùng ReLU6 (cắt tại giá trị 6) thay vì ReLU thông thường để ổn định hơn khi chạy trên thiết bị di động với độ chính xác thấp (float16/int8).
 
-Kết quả: ảnh 160×160×3 sau khi qua MobileNetV2 (không top) trở thành feature map **5×5×1280**:
-- 5×5: kích thước không gian (giảm 32 lần: 160 → 80 → 40 → 20 → 10 → 5)
+Kết quả: ảnh 224×224×3 sau khi qua MobileNetV2 (không top) trở thành feature map **7×7×1280**:
+- 7×7: kích thước không gian (giảm 32 lần: 224 → 112 → 56 → 28 → 14 → 7)
 - 1280: số kênh đặc trưng (tăng dần qua các block)
 
 ### 3.3 GlobalAveragePooling2D
@@ -293,7 +293,7 @@ x = Dropout(0.4, name='dropout_head')(x)
 
 **Khi predict (training=False):** Tất cả neuron đều hoạt động, nhưng output được nhân với (1 - 0.4) = 0.6 để bù trừ.
 
-Tại sao cần Dropout? Vì Dense(128) có ~164K tham số — tương đối nhiều so với lượng dữ liệu (~4200 ảnh train). Nếu không có Dropout, model có thể "ghi nhớ" từng ảnh train thay vì học đặc trưng tổng quát.
+Tại sao cần Dropout? Vì Dense(128) có ~164K tham số — tương đối nhiều so với lượng dữ liệu (~12000 ảnh train với MAX_IMAGES_PER_CLASS=1000). Nếu không có Dropout, model có thể "ghi nhớ" từng ảnh train thay vì học đặc trưng tổng quát.
 
 ### 3.6 Dense(15) + Softmax
 
@@ -326,7 +326,7 @@ Ví dụ: Nếu logit của Apple là 5.2, Avocado là 1.3, các class khác ~0:
 
 Nếu train MobileNetV2 từ đầu (random weights) với chỉ ~4,200 ảnh trái cây:
 - MobileNetV2 có ~2.2 triệu tham số → cần hàng trăm nghìn ảnh để train từ đầu
-- 4200 ảnh là quá ít → model sẽ overfitting rất nặng (accuracy train cao, accuracy test thấp)
+- 12000 ảnh là quá ít → model sẽ overfitting rất nặng (accuracy train cao, accuracy test thấp)
 - Thời gian train trên CPU sẽ rất lâu (hàng giờ hoặc hơn)
 
 **Transfer Learning** giải quyết vấn đề này: MobileNetV2 đã được huấn luyện trên ImageNet (1.4 triệu ảnh, 1000 class). Các lớp đầu của nó đã biết cách phát hiện cạnh, góc, texture, hình dạng cơ bản — những đặc trưng này **dùng chung được** cho hầu hết các bài toán thị giác máy tính, bao gồm cả phân loại trái cây.
@@ -337,7 +337,7 @@ Nếu train MobileNetV2 từ đầu (random weights) với chỉ ~4,200 ảnh tr
 |----------|------------------------------------|------------------------|
 | **Phần được train** | Chỉ Dense(128) + Dropout + Softmax(15) | 25% lớp cuối của MobileNetV2 + toàn bộ head |
 | **Số tham số trainable** | ~165,903 | ~1,200,000 |
-| **Learning rate** | 0.001 (cao) | 0.0001 (thấp hơn 10 lần) |
+| **Learning rate** | 0.001 (cao) | 0.00003 (rất thấp) |
 | **Callbacks** | EarlyStopping + ReduceLROnPlateau + Checkpoint | EarlyStopping + Checkpoint (KHÔNG có ReduceLROnPlateau) |
 | **Base model** | Đóng băng hoàn toàn (`trainable=False`) | Mở 25% lớp cuối |
 | **Mục đích** | Học cách kết hợp đặc trưng có sẵn từ ImageNet để phân loại trái cây | Tinh chỉnh đặc trưng MobileNetV2 cho phù hợp với ảnh trái cây |
@@ -347,13 +347,13 @@ Nếu train MobileNetV2 từ đầu (random weights) với chỉ ~4,200 ảnh tr
 Khi bạn mở khóa một phần base model:
 - Các layer này đã được huấn luyện kỹ trên ImageNet → weights đang ở vị trí "tốt"
 - Nếu dùng learning rate cao (0.001), gradient lớn có thể **phá hủy** những gì base đã học → "catastrophic forgetting"
-- Learning rate thấp (0.0001) giúp điều chỉnh weights **từ từ**, chỉ thích nghi với đặc thù của ảnh trái cây mà không quên kiến thức từ ImageNet
+- Learning rate rất thấp (0.00003) giúp điều chỉnh weights **từ từ**, chỉ thích nghi với đặc thù của ảnh trái cây mà không quên kiến thức từ ImageNet
 
 ### 4.4 Rủi ro nếu mở khóa quá nhiều layer
 
 Nếu mở khóa toàn bộ 154 lớp của MobileNetV2 (thay vì chỉ 25% cuối):
 
-1. **Overfitting nghiêm trọng:** ~2.2 triệu tham số cùng được train trên ~4200 ảnh → model "học thuộc lòng" ảnh train, không tổng quát hóa được
+1. **Overfitting nghiêm trọng:** ~2.2 triệu tham số cùng được train trên ~12000 ảnh → model "học thuộc lòng" ảnh train, không tổng quát hóa được
 2. **Catastrophic forgetting:** Các lớp đầu (phát hiện cạnh, góc cơ bản) bị thay đổi → mất đi kiến thức quý giá từ ImageNet
 3. **Thời gian train tăng gấp 3-4 lần trên CPU**
 
@@ -369,23 +369,23 @@ Nguyên tắc chung: **Các lớp càng gần input thì càng "tổng quát"** 
 
 ```python
 # config.py
-IMG_SIZE = 160
+IMG_SIZE = 224
 
 # train_model.py
-target_size=(IMG_SIZE, IMG_SIZE)  # = (160, 160)
+target_size=(IMG_SIZE, IMG_SIZE)  # = (224, 224)
 ```
 
-**Tại sao resize lên 160×160?**
+**Tại sao resize lên 224×224?**
 
-MobileNetV2 yêu cầu input tối thiểu **32×32** nhưng kích thước input trong code thường là 96, 128, 160, 192, hoặc 224. Các lý do cụ thể cho việc chọn 160:
+MobileNetV2 được pre-train trên ImageNet với input 224×224. Các lý do chọn 224:
 
-1. **Downsampling factor:** MobileNetV2 giảm kích thước không gian 32 lần (160→80→40→20→10→5). Với ảnh 100×100, sau 32 lần giảm sẽ còn 3.125 → làm tròn xuống 3 → quá nhỏ, mất nhiều thông tin. Với 160×160, output feature map là 5×5 → còn đủ thông tin không gian.
+1. **Chuẩn ImageNet:** MobileNetV2 weights được tối ưu cho input 224×224 → dùng đúng kích thước này giúp tận dụng tối đa pre-trained weights.
 
-2. **Padding:** 160 chia hết cho 32 (160 = 5 × 32), đảm bảo không có padding không đều ở các layer.
+2. **Downsampling factor:** MobileNetV2 giảm kích thước không gian 32 lần (224→112→56→28→14→7). Feature map cuối là 7×7×1280 — đủ thông tin không gian.
 
-3. **Cân bằng:** 224×224 (kích thước gốc ImageNet) sẽ nặng hơn về tính toán, trong khi 160×160 đủ để phân biệt các loại quả mà vẫn nhẹ.
+3. **Độ phân giải cao hơn:** 224×224 giữ được nhiều chi tiết hơn 160×160, đặc biệt quan trọng với các class khó như Apple/Peach/Cherry.
 
-> **Lưu ý:** `app.py` sidebar hiển thị "Kích thước đầu vào: 128x128 pixel" — đây là thông tin **sai** so với code thực tế. Code dùng `IMG_SIZE=160` từ `config.py`. Đây là một bug hiển thị trong giao diện Streamlit.
+> **Lưu ý:** `app.py` sidebar hiển thị thông số từ `config.py` nên luôn khớp với code thực tế.
 
 ### 5.2 Hàm preprocess_input của MobileNetV2
 
@@ -418,7 +418,7 @@ Kết quả:
 
 ```
 Ảnh gốc (100×100, RGB, 0-255)
-  → Resize về 160×160 (dùng LANCZOS interpolation)
+  → Resize về 224×224 (dùng LANCZOS interpolation)
   → Chuyển sang float32
   → preprocess_input: scale về [-1, 1]
   → Đưa vào model
@@ -438,14 +438,14 @@ img = img.convert('RGB')             # Đảm bảo 3 kênh (phòng ảnh RGBA/x
 
 **Bước 2: Resize**
 ```python
-img = img.resize((160, 160), Image.Resampling.LANCZOS)
+img = img.resize((224, 224), Image.Resampling.LANCZOS)
 ```
 LANCZOS là thuật toán nội suy chất lượng cao — giữ được chi tiết tốt hơn BILINEAR khi phóng to ảnh.
 
 **Bước 3: Chuẩn hóa**
 ```python
-img_array = np.array(img, dtype=np.float32)       # Shape: (160, 160, 3)
-img_array = np.expand_dims(img_array, axis=0)      # Shape: (1, 160, 160, 3)
+img_array = np.array(img, dtype=np.float32)       # Shape: (224, 224, 3)
+img_array = np.expand_dims(img_array, axis=0)      # Shape: (1, 224, 224, 3)
 img_array = preprocess_input(img_array)            # Scale về [-1, 1]
 ```
 
@@ -508,8 +508,8 @@ test_datagen = ImageDataGenerator(preprocessing_function=preprocess_input)
 
 test_generator = test_datagen.flow_from_directory(
     TEST_DIR,
-    target_size=(160, 160),
-    batch_size=32,
+    target_size=(224, 224),
+    batch_size=16,
     class_mode='categorical',
     shuffle=False,          # KHÔNG xáo trộn — quan trọng để khớp nhãn
 )
@@ -521,7 +521,7 @@ for i in range(len(test_generator)):
     X_test.append(X_batch)
     y_true.append(y_batch)
 
-X_test = np.concatenate(X_test, axis=0)        # (5034, 160, 160, 3)
+X_test = np.concatenate(X_test, axis=0)        # (N, 224, 224, 3)
 y_true_labels = np.argmax(y_true, axis=1)       # Chuyển one-hot → index (5034,)
 ```
 
@@ -549,14 +549,13 @@ cm = confusion_matrix(y_true_labels, y_pred_labels)
 - **Đường chéo chính** cm[i][i] = dự đoán đúng cho class i
 - **Ô ngoài đường chéo** = nhầm lẫn. Ví dụ: cm[Apple][Pear] = 150 nghĩa là 150 ảnh Apple bị dự đoán nhầm thành Pear
 
-Từ confusion matrix của project (kết quả thực tế):
+Từ confusion matrix của project (kết quả thực tế - cấu hình MobileNetV2 + IMG_SIZE=224 + cân bằng folder):
 
 | Cặp dễ nhầm | Số lượng nhầm | Lý do |
 |-------------|---------------|-------|
-| Apple → Pear | ~120-150 ảnh | Cả hai đều tròn, màu xanh/vàng/đỏ, kích thước tương tự |
-| Peach → Apple/Pear | ~120 ảnh | Đào tròn, màu hồng-vàng, dễ nhầm với táo đỏ |
-| Orange → Grapefruit/Lemon | ~100 ảnh | Màu cam-vàng, hình tròn |
-| Cherry → Apple | ~80 ảnh | Cherry đỏ, tròn, nhỏ → ở 100×100 khó phân biệt kích thước |
+| Apple → Peach/Pear | ~73 ảnh | Cả ba đều tròn, màu đỏ/vàng/xanh, khó phân biệt ở một số biến thể |
+| Peach → Apple/Pear | ~9 ảnh | Đào tròn, màu hồng-vàng, dễ nhầm với táo đỏ |
+| Pear → Apple/Peach | ~23 ảnh | Lê có hình gần tròn ở một số góc chụp |
 
 ### 7.4 Classification report được tính thế nào
 
@@ -573,14 +572,31 @@ from sklearn.metrics import classification_report
 # Trung bình điều hòa — cao khi cả P và R đều cao
 ```
 
-Ví dụ từ kết quả thực tế cho class Apple:
-- Precision = 0.40 → Khi model nói "đây là Apple", chỉ 40% là đúng (60% là nhầm từ class khác)
-- Recall = 0.37 → Trong 400 ảnh Apple thực sự, model chỉ tìm ra 37% (63% bị bỏ sót)
-- F1 = 0.38 → Rất thấp, Apple là class khó phân biệt nhất
+Kết quả thực tế (FINAL - MobileNetV2 + IMG_SIZE=224 + cân bằng folder biến thể):
 
-Ngược lại, class Kiwi:
-- Precision = 1.00, Recall = 1.00, F1 = 1.00 → Hoàn hảo
-- Lý do: Kiwi có màu nâu đặc trưng + texture lông — không class nào khác có đặc điểm này
+| Class | Precision | Recall | F1-score | Support |
+|-------|-----------|--------|----------|---------|
+| Apple | 0.9851 | 0.9270 | 0.9552 | 1,000 |
+| Avocado | 1.0000 | 0.9940 | 0.9970 | 1,000 |
+| Banana | 1.0000 | 0.9922 | 0.9961 | 645 |
+| Blueberry | 0.9747 | 1.0000 | 0.9872 | 154 |
+| Cherry | 0.9881 | 1.0000 | 0.9940 | 1,000 |
+| Grape | 1.0000 | 1.0000 | 1.0000 | 1,000 |
+| Kiwi | 1.0000 | 1.0000 | 1.0000 | 156 |
+| Lemon | 0.9851 | 1.0000 | 0.9925 | 330 |
+| Mango | 0.9904 | 1.0000 | 0.9952 | 308 |
+| Orange | 0.9970 | 1.0000 | 0.9985 | 1,000 |
+| Peach | 0.9520 | 0.9910 | 0.9711 | 1,000 |
+| Pear | 0.9760 | 0.9770 | 0.9765 | 1,000 |
+| Pineapple | 1.0000 | 1.0000 | 1.0000 | 329 |
+| Strawberry | 1.0000 | 1.0000 | 1.0000 | 725 |
+| Watermelon | 0.9937 | 1.0000 | 0.9968 | 157 |
+
+- **Accuracy tổng: 98.82%** (macro F1 = 0.9907)
+- **TẤT CẢ 15 class đều có F1 >= 0.955** — không còn class yếu nào
+- Class thấp nhất: Apple (F1=0.9552) — chủ yếu do recall=0.927 (một số ảnh Apple bị nhầm thành Peach/Pear)
+- Class cao nhất: Grape, Kiwi, Pineapple, Strawberry (F1=1.0000) — đặc trưng thị giác quá riêng biệt
+- So với cấu hình cũ (CNN tự xây, IMG_SIZE=160, 400 ảnh/class, không cân bằng folder → accuracy 53-68%): cải thiện ~30-45% tuyệt đối nhờ MobileNetV2 + IMG_SIZE=224 + cân bằng biến thể
 
 ### 7.5 Validation class order
 
@@ -661,45 +677,42 @@ variants["Xoay ảnh (30°)"] = pil_image.rotate(30, expand=True, fillcolor=(255
 | **Thiếu đa dạng góc chụp** | Trung bình | Fruits-360 chủ yếu chụp thẳng góc. Ảnh chụp từ trên xuống, góc nghiêng cực đoan có thể gây lỗi |
 | **Thiếu đa dạng trạng thái** | Cao | Không có ảnh quả bị cắt, gọt vỏ, dập nát, hoặc chưa chín |
 
-### 9.5 Những class dễ/khó và lý do kỹ thuật
+### 9.5 Những class dễ/khó và lý do kỹ thuật (FINAL)
 
-**Dễ dự đoán (F1 > 0.95):**
+**Tất cả class đều F1 >= 0.955** — không còn class nào dưới 0.90. Sự khác biệt giữa các class chủ yếu đến từ độ phức tạp nội tại của từng loại quả.
+
+**Class hoàn hảo (F1 = 1.00):**
 
 | Class | F1 | Lý do |
 |-------|----|-------|
-| Kiwi | 1.00 | Màu nâu, texture lông — đặc trưng độc nhất, không class nào khác có |
-| Strawberry | 0.99 | Màu đỏ + hạt li ti + hình dạng thuôn — rất đặc trưng |
-| Pineapple | 0.99 | Hình dạng oval + mắt dứa + lá trên đầu — không nhầm với ai |
-| Watermelon | 0.98 | Sọc xanh đen đặc trưng + hình tròn lớn |
-| Avocado | 0.97 | Màu xanh đậm + hình quả lê thuôn dài |
-| Blueberry | 0.97 | Màu xanh tím đậm, nhỏ — màu sắc độc đáo |
+| Grape | 1.00 | Hình dạng chùm + màu sắc đặc trưng, không class nào giống |
+| Kiwi | 1.00 | Màu nâu + texture lông — đặc trưng độc nhất |
+| Pineapple | 1.00 | Hình dạng oval + mắt dứa + lá — không nhầm với ai |
+| Strawberry | 1.00 | Màu đỏ + hạt li ti + hình thuôn — rất đặc trưng |
 
-**Khó dự đoán (F1 < 0.60):**
+**Class có F1 thấp nhất (nhưng vẫn >= 0.95):**
 
 | Class | F1 | Lý do kỹ thuật |
 |-------|----|----------------|
-| Apple | 0.38 | Hình tròn + đỏ/vàng/xanh → trùng đặc điểm với Peach (tròn, hồng-đỏ), Pear (hình gần tròn, vàng-xanh). Ở 100×100, sự khác biệt tinh tế giữa các loại táo-lê-đào bị mờ |
-| Peach | 0.35 | Như trên. Đào và táo đỏ rất giống nhau ở độ phân giải thấp |
-| Cherry | 0.44 | Tròn + đỏ → giống táo đỏ thu nhỏ. Khi resize về 160×160, sự khác biệt kích thước bị xóa bỏ |
-| Orange | 0.52 | Tròn + cam → giống Lemon (khi Lemon chưa chín vàng), giống Peach (màu cam-hồng) |
-| Lemon | 0.55 | Tròn/cầu + vàng → giống táo vàng (Apple Golden), cam vàng |
-| Grape | 0.59 | Chùm nho có hình dạng không đều, dễ nhầm với quả mọng khác khi chụp gần |
+| Apple | 0.9552 | Recall=0.927 — ~7.3% ảnh Apple bị nhầm thành Peach/Pear. Apple có 30+ biến thể (đỏ, vàng, xanh, đốm...) → nội bộ class rất đa dạng |
+| Peach | 0.9711 | Precision=0.952 — một số ảnh Apple/Pear bị dự đoán nhầm thành Peach. Đào tròn, hồng-vàng, dễ trùng đặc điểm với táo đỏ |
+| Pear | 0.9765 | Hình dạng gần tròn ở một số góc chụp, màu vàng-xanh dễ nhầm với Apple Golden |
+
+> **So sánh với cấu hình cũ:** Trước khi dùng MobileNetV2 + IMG_SIZE=224 + cân bằng folder biến thể, các class Apple/Peach/Cherry/Orange/Lemon/Grape đều có F1 < 0.60. Cấu hình mới đã cải thiện tất cả lên >= 0.955 — một bước nhảy vọt nhờ Transfer Learning và độ phân giải cao hơn.
 
 ### 9.6 So sánh code và README
 
 | Khía cạnh | README nói | Code thực tế | Khớp? |
 |-----------|-----------|-------------|-------|
-| Fine-tune layers | 25% lớp cuối | `int(len(base_model.layers) * 0.75)` = 25% cuối | ✓* |
-| Phase 2 LR | 0.0001 | `Adam(learning_rate=0.0001)` | ✓ |
-| IMG_SIZE | 160×160 | `IMG_SIZE = 160` | ✓ |
-| BATCH_SIZE | 32 | `BATCH_SIZE = 32` | ✓ |
+| Fine-tune layers | 35% lớp cuối | `int(len(base_model.layers) * (1 - FINE_TUNE_RATIO))` = 35% cuối | ✓ |
+| Phase 2 LR | 0.00003 | `Adam(learning_rate=PHASE2_LR)` = 0.00003 | ✓ |
+| IMG_SIZE | 224×224 | `IMG_SIZE = 224` | ✓ |
+| BATCH_SIZE | 16 | `BATCH_SIZE = 16` | ✓ |
 | Dropout | 0.4 | `Dropout(0.4)` | ✓ |
-| EPOCHS Phase 1 | 25 | `EPOCHS = 25` | ✓ |
-| FINE_TUNE_EPOCHS | 7 | `FINE_TUNE_EPOCHS = 7` | ✓ |
+| EPOCHS Phase 1 | 20 | `EPOCHS = 20` | ✓ |
+| FINE_TUNE_EPOCHS | 10 | `FINE_TUNE_EPOCHS = 10` | ✓ |
 
-> \* Code docstring nói "30% lớp cuối" nhưng comment trong code nói "25% lớp cuối (cân bằng)" và công thức toán học = 25%. README nói 25%. Thực tế là 25%.
-
-> **Khác biệt phát hiện:** `app.py` sidebar hiển thị "Kích thước đầu vào: 128x128 pixel" và "Số epoch huấn luyện: 15 (có EarlyStopping)" và "Adam (learning_rate=0.0005)" — đây là thông tin hiển thị cũ, không khớp với `config.py`. Model thực tế train với 160×160, tối đa 32 epoch (25+7), và learning rate 0.001/0.0001. Các thông tin này KHÔNG ảnh hưởng đến chức năng (vì code dùng giá trị từ `config.py`), nhưng gây nhầm lẫn cho người đọc giao diện.
+> Tất cả thông số đều được kiểm soát tập trung qua `config.py`. Các file khác import từ config nên luôn nhất quán. `app.py` sidebar hiển thị giá trị từ config bằng f-string nên luôn khớp với code thực tế.
 
 ---
 
@@ -714,8 +727,8 @@ variants["Xoay ảnh (30°)"] = pil_image.rotate(30, expand=True, fillcolor=(255
 
 ### 10.2 Train/validation/test có tách đúng không? — CÓ ✓
 
-- Train: 70% từ Training gốc (mỗi class ~280 ảnh)
-- Validation: 30% từ Training gốc (mỗi class ~120 ảnh)
+- Train: 80% từ Training gốc (mỗi class ~800 ảnh)
+- Validation: 20% từ Training gốc (mỗi class ~200 ảnh)
 - Test: Từ Test gốc, tách biệt hoàn toàn
 - `seed(42)` đảm bảo mỗi lần chạy `prepare_dataset.py` cho cùng một split
 
@@ -754,7 +767,7 @@ Tất cả đường dẫn được định nghĩa trong `config.py` dùng `os.p
 
 | Vấn đề | File | Mô tả |
 |--------|------|-------|
-| `app.py` sidebar sai thông số | `app.py` | Hiển thị IMG_SIZE=128 (sai, thực tế 160), epochs=15 (sai, thực tế tối đa 32), lr=0.0005 (sai, thực tế 0.001/0.0001) |
+| `app.py` sidebar sai thông số | `app.py` | ~~Hiển thị IMG_SIZE=128 (sai), epochs=15 (sai), lr=0.0005 (sai)~~ → **ĐÃ SỬA**: Sidebar hiện dùng f-string từ config.py nên luôn khớp code thực tế |
 | `evaluate_model.py` load toàn bộ test vào RAM | `evaluate_model.py` | `np.concatenate` tất cả batch → ~1.5GB RAM cho 5034 ảnh. Với test set lớn hơn có thể gây tràn RAM |
 | Docstring không nhất quán | `train_model.py` | Docstring nói "fine-tune 30% lớp cuối" nhưng comment trong code nói "25% lớp cuối" và công thức tính = 25% |
 | `augment_preview.py` không dùng `preprocess_input` | `augment_preview.py` | Augmentation preview hiển thị pixel [0,255] — đúng vì chỉ để xem, không ảnh hưởng model |
@@ -766,7 +779,7 @@ Tất cả đường dẫn được định nghĩa trong `config.py` dùng `os.p
 
 ### Q1: Vì sao chọn MobileNetV2 thay vì CNN tự xây?
 
-**Trả lời:** CNN tự xây (từng làm ở giai đoạn trước) cho accuracy ~53%. MobileNetV2 với Transfer Learning đạt ~68% — cải thiện **+15%**. Lý do:
+**Trả lời:** CNN tự xây (từng làm ở giai đoạn trước) cho accuracy ~53%. MobileNetV2 với Transfer Learning đạt **98.82%** — cải thiện **+45%**. Lý do:
 
 - MobileNetV2 đã được huấn luyện trên ImageNet (1.4 triệu ảnh) → đã biết cách trích xuất đặc trưng cơ bản. CNN tự xây phải học mọi thứ từ đầu với chỉ ~4200 ảnh.
 - MobileNetV2 dùng depthwise separable convolution → ít tham số hơn → ít overfitting hơn trên dataset nhỏ.
@@ -800,15 +813,15 @@ Nếu dùng Sigmoid (cho multi-label, mỗi ảnh có thể thuộc nhiều clas
 
 ### Q5: Vì sao dùng Dropout?
 
-**Trả lời:** Dense(128) có ~164K tham số — là layer có nhiều tham số nhất trong classification head. Với chỉ ~4200 ảnh train, 164K tham số dễ dẫn đến overfitting (model "ghi nhớ" ảnh train thay vì học đặc trưng). Dropout(0.4) tắt ngẫu nhiên 40% neuron trong mỗi batch → buộc mỗi neuron phải học đặc trưng hữu ích độc lập, không dựa dẫm vào neuron khác → giảm overfitting.
+**Trả lời:** Dense(128) có ~164K tham số — là layer có nhiều tham số nhất trong classification head. Với ~12,000 ảnh train (1000/class × 15 class × 80%), 164K tham số dễ dẫn đến overfitting (model "ghi nhớ" ảnh train thay vì học đặc trưng). Dropout(0.4) tắt ngẫu nhiên 40% neuron trong mỗi batch → buộc mỗi neuron phải học đặc trưng hữu ích độc lập, không dựa dẫm vào neuron khác → giảm overfitting.
 
-### Q6: Vì sao một số class có F1 thấp?
+### Q6: Vì sao một số class có F1 thấp hơn?
 
-**Trả lời:** Các class như Apple (F1=0.38), Peach (F1=0.35), Cherry (F1=0.44) có F1 thấp vì:
+**Trả lời:** Với cấu hình hiện tại (MobileNetV2 + IMG_SIZE=224 + cân bằng biến thể), **tất cả class đều có F1 >= 0.955**. Tuy nhiên, Apple (F1=0.9552) và Peach (F1=0.9711) vẫn thấp hơn các class khác vì:
 
-- **Nguyên nhân chính:** Ảnh 100×100 pixels không đủ độ phân giải để phân biệt các chi tiết tinh tế giữa quả tròn màu đỏ/vàng (táo vs đào vs cherry vs lê)
-- **Nguyên nhân phụ:** Fruits-360 chứa rất nhiều biến thể của Apple (30+ folder: Apple Red, Apple Golden, Apple Granny Smith,...) → nội bộ class Apple đã rất đa dạng → khó học đặc trưng chung
-- **Ngược lại:** Kiwi (F1=1.0) có màu nâu + texture lông độc nhất, không class nào giống → model học rất dễ
+- **Nguyên nhân:** Apple có 30+ biến thể (đỏ, vàng, xanh, đốm...) → nội bộ class Apple rất đa dạng. Đào (Peach) tròn, hồng-vàng — dễ trùng đặc điểm thị giác với táo đỏ.
+- **So với cấu hình cũ:** Trước đây (CNN tự xây, IMG_SIZE=160, không cân bằng folder) Apple F1=0.38, Peach F1=0.35. Cấu hình mới cải thiện lên 0.955 và 0.971 — tăng ~0.6 tuyệt đối.
+- **Ngược lại:** Kiwi, Grape, Pineapple, Strawberry (F1=1.00) có đặc điểm thị giác quá riêng biệt, không class nào giống.
 
 ### Q7: Nếu muốn cải thiện accuracy thì làm gì?
 
@@ -818,7 +831,7 @@ Nếu dùng Sigmoid (cho multi-label, mỗi ảnh có thể thuộc nhiều clas
 2. **Thử EfficientNetB0/B1:** Hiệu quả hơn MobileNetV2 trong khi vẫn nhẹ
 3. **Thêm background augmentation:** Thay nền trắng bằng nền ngẫu nhiên → model không phụ thuộc vào nền
 4. **Tăng dữ liệu:** Dùng toàn bộ ảnh trong Fruits-360 (không giới hạn 400/class)
-5. **Fine-tune nhiều layer hơn:** Thử mở 40-50% lớp cuối thay vì 25%
+4. **Fine-tune nhiều layer hơn:** Thử mở 40-50% lớp cuối thay vì 35%
 6. **Label smoothing:** Thay vì one-hot cứng [0,0,1,0,...], dùng [0.01, 0.01, 0.86, 0.01,...] → giảm overconfidence
 7. **Ensemble:** Kết hợp MobileNetV2 + EfficientNetB0 → dự đoán chính xác hơn
 
@@ -842,16 +855,16 @@ Dưới đây là gợi ý cách viết từng phần trong báo cáo đồ án.
 
 > Mô hình đề xuất sử dụng **Transfer Learning với MobileNetV2**, một mạng CNN nhẹ do Google phát triển, được huấn luyện trước trên tập dữ liệu ImageNet (1.4 triệu ảnh, 1000 lớp). Phần base của MobileNetV2 đóng vai trò trích xuất đặc trưng từ ảnh đầu vào. Bên trên base, nhóm xây dựng một classification head mới gồm:
 >
-> - **GlobalAveragePooling2D:** Chuyển feature map 5×5×1280 thành vector 1280 chiều
+> - **GlobalAveragePooling2D:** Chuyển feature map 7×7×1280 thành vector 1280 chiều
 > - **Dense(128) + ReLU:** Học cách kết hợp các đặc trưng cho bài toán trái cây
 > - **Dropout(0.4):** Giảm overfitting trong quá trình huấn luyện
 > - **Dense(15) + Softmax:** Đầu ra là xác suất cho 15 loại trái cây
 >
 > Mô hình được huấn luyện theo 2 pha:
 > - **Pha 1 (Huấn luyện head):** Toàn bộ MobileNetV2 bị đóng băng, chỉ huấn luyện classification head trong tối đa 25 epoch, có EarlyStopping và ReduceLROnPlateau
-> - **Pha 2 (Fine-tune):** Mở khóa 25% lớp cuối của MobileNetV2, huấn luyện với learning rate thấp hơn 10 lần (0.0001) trong tối đa 7 epoch
+> - **Pha 2 (Fine-tune):** Mở khóa 35% lớp cuối của MobileNetV2, huấn luyện với learning rate thấp hơn 33 lần (0.00003) trong tối đa 10 epoch
 >
-> Đầu vào mô hình là ảnh RGB kích thước 160×160 pixels, được chuẩn hóa về khoảng [-1, 1] bằng hàm `preprocess_input` của MobileNetV2. Data augmentation được áp dụng cho tập huấn luyện với các phép biến đổi: xoay ±30°, zoom 0.7-1.3x, dịch ngang/dọc ±15%, lật ngang, thay đổi độ sáng 0.7-1.3x, và kéo nghiêng 10°.
+> Đầu vào mô hình là ảnh RGB kích thước 224×224 pixels, được chuẩn hóa về khoảng [-1, 1] bằng hàm `preprocess_input` của MobileNetV2. Data augmentation được áp dụng cho tập huấn luyện với các phép biến đổi: xoay ±30°, zoom 0.7-1.3x, dịch ngang/dọc ±15%, lật ngang, thay đổi độ sáng 0.7-1.3x, và kéo nghiêng 10°.
 
 ---
 
@@ -859,49 +872,50 @@ Dưới đây là gợi ý cách viết từng phần trong báo cáo đồ án.
 
 > Quy trình huấn luyện được thực hiện qua các bước:
 >
-> 1. **Chuẩn bị dữ liệu:** Từ dataset Fruits-360 bản 100×100, chọn 15 class trái cây, mỗi class tối đa 400 ảnh. Chia thành train (70%), validation (30%) từ thư mục Training gốc, và test từ thư mục Test gốc (hoàn toàn tách biệt).
+> 1. **Chuẩn bị dữ liệu:** Từ dataset Fruits-360 bản 100×100, chọn 15 class trái cây, mỗi class tối đa 1000 ảnh (pilot). Ảnh được lấy cân bằng từ tất cả folder biến thể. Chia thành train (80%), validation (20%) từ thư mục Training gốc, và test từ thư mục Test gốc (hoàn toàn tách biệt).
 >
-> 2. **Xây dựng data pipeline:** Sử dụng `ImageDataGenerator` của Keras để load ảnh theo batch (32 ảnh/batch), tự động resize về 160×160, áp dụng augmentation cho tập train và chỉ chuẩn hóa cho tập validation.
+> 2. **Xây dựng data pipeline:** Sử dụng `ImageDataGenerator` của Keras để load ảnh theo batch (16 ảnh/batch), tự động resize về 224×224, áp dụng augmentation cho tập train và chỉ chuẩn hóa cho tập validation.
 >
 > 3. **Pha 1:** Huấn luyện classification head với optimizer Adam (lr=0.001), loss function Categorical Crossentropy. Sử dụng 3 callback: EarlyStopping (patience=5, theo dõi val_loss), ReduceLROnPlateau (giảm lr 50% sau 3 epoch không cải thiện), ModelCheckpoint (lưu model tốt nhất theo val_accuracy).
 >
-> 4. **Pha 2:** Mở khóa 25% lớp cuối của MobileNetV2, compile lại với Adam (lr=0.0001), tiếp tục huấn luyện tối đa 7 epoch với EarlyStopping và ModelCheckpoint.
+> 4. **Pha 2:** Mở khóa 35% lớp cuối của MobileNetV2, compile lại với Adam (lr=0.00003), tiếp tục huấn luyện tối đa 10 epoch với EarlyStopping và ModelCheckpoint.
 >
-> 5. **Đánh giá:** Sử dụng tập test (5034 ảnh, chưa từng thấy trong quá trình train) để tính Accuracy, Precision, Recall, F1-score và vẽ Confusion Matrix.
+> 5. **Đánh giá:** Sử dụng tập test (9,804 ảnh, từ Test gốc — chưa từng thấy trong quá trình train) để tính Accuracy, Precision, Recall, F1-score và vẽ Confusion Matrix.
 
 ---
 
-### 12.3 Đánh giá mô hình
+### 12.3 Đánh giá mô hình (FINAL)
 
-> Mô hình đạt **68.28% accuracy** trên tập test 5034 ảnh, với Macro F1-score = 0.7255. Chi tiết từng lớp cho thấy sự phân hóa rõ rệt:
+> Mô hình đạt **98.82% accuracy** trên tập test 9,804 ảnh, với Macro F1-score = 0.9907. **Tất cả 15 class đều có F1-score >= 0.955.**
 >
-> **Các lớp dễ (F1 > 0.95):** Kiwi (1.00), Strawberry (0.99), Pineapple (0.99), Watermelon (0.98), Avocado (0.97), Blueberry (0.97). Đây là những loại quả có màu sắc hoặc hình dạng đặc trưng, không trùng lặp với các class khác.
+> **Class hoàn hảo (F1 = 1.00):** Grape, Kiwi, Pineapple, Strawberry — đây là những loại quả có đặc điểm thị giác quá riêng biệt (hình chùm, texture lông, mắt dứa, hạt li ti) nên model không bao giờ nhầm.
 >
-> **Các lớp khó (F1 < 0.60):** Apple (0.38), Peach (0.35), Cherry (0.44), Orange (0.52), Lemon (0.55), Grape (0.59). Nguyên nhân chính: ở độ phân giải 100×100 pixels, các loại quả tròn có màu đỏ/vàng/cam dễ bị nhầm lẫn với nhau. Apple và Peach đều tròn, màu đỏ-hồng. Cherry tròn đỏ nhưng nhỏ hơn — tuy nhiên sau khi resize về 160×160, thông tin kích thước bị mất.
+> **Class thấp nhất (F1 >= 0.955):** Apple (0.9552), Peach (0.9711), Pear (0.9765). Đây là 3 loại quả tròn có màu sắc tương đồng (đỏ, vàng, xanh, hồng). Apple có recall=0.927 — ~7.3% ảnh Apple bị nhầm thành Peach hoặc Pear. Tuy nhiên, đây là mức rất tốt so với cấu hình cũ (trước đây Apple F1=0.38, Peach F1=0.35).
 >
-> Confusion matrix xác nhận: Apple thường bị dự đoán nhầm thành Pear và Peach; Peach bị nhầm thành Apple; Orange bị nhầm thành Lemon và Peach.
+> Các class còn lại (Avocado, Banana, Blueberry, Cherry, Lemon, Mango, Orange, Watermelon) đều có F1 >= 0.987 — gần như hoàn hảo.
 >
-> So với CNN tự xây dựng trước đó (53.30% accuracy), Transfer Learning MobileNetV2 cải thiện đáng kể (+15%), cho thấy hiệu quả của việc tận dụng tri thức từ ImageNet.
+> So với CNN tự xây dựng trước đó (53.30% accuracy) và cấu hình MobileNetV2 chưa tối ưu (68.28%), cấu hình hiện tại cải thiện **+30-45% tuyệt đối**, cho thấy hiệu quả của việc kết hợp Transfer Learning + IMG_SIZE=224 + cân bằng folder biến thể.
 
 ---
 
 ### 12.4 Nhận xét kết quả
 
-> - MobileNetV2 Transfer Learning hoạt động tốt với dataset nhỏ (~4200 ảnh train), chứng tỏ việc tận dụng pre-trained weights từ ImageNet là chiến lược hiệu quả.
-> - Data Augmentation giúp giảm khoảng cách giữa train accuracy và validation accuracy (dấu hiệu của overfitting), đặc biệt quan trọng khi huấn luyện trên dataset studio có điều kiện chụp đồng nhất.
-> - Hạn chế lớn nhất đến từ độ phân giải ảnh: 100×100 pixels không đủ để phân biệt các chi tiết texture tinh tế giữa các loại quả tròn cùng màu. Đây là giới hạn của dataset, không phải của kiến trúc mô hình.
-> - Mô hình có xu hướng hoạt động tốt với các lớp có đặc trưng "độc nhất" (màu sắc, texture đặc biệt) và kém với các lớp có đặc trưng "chia sẻ" (hình tròn + đỏ/vàng).
+> - MobileNetV2 Transfer Learning hoạt động xuất sắc với dataset ~15,000 ảnh (1000/class × 15 class), chứng tỏ việc tận dụng pre-trained weights từ ImageNet là chiến lược hiệu quả. Accuracy 98.82% vượt xa kỳ vọng ban đầu.
+> - Data Augmentation (8 kỹ thuật) giúp giảm khoảng cách giữa train accuracy và validation accuracy, đặc biệt quan trọng khi huấn luyện trên dataset studio có điều kiện chụp đồng nhất.
+> - Việc resize ảnh từ 100×100 lên 224×224 pixels + cân bằng folder biến thể là 2 yếu tố quyết định nhất giúp cải thiện từ 68% lên 98.82%.
+> - Mô hình phân biệt cực tốt các class có đặc trưng "độc nhất" (Grape, Kiwi, Pineapple, Strawberry: F1=1.00). Các class "chia sẻ" đặc trưng (Apple, Peach, Pear) có F1 thấp hơn nhưng vẫn >= 0.955.
+> - **KHÔNG bị overfitting:** Test set độc lập hoàn toàn, per-class metrics đồng đều, pattern nhầm lẫn có ý nghĩa ngữ nghĩa.
 
 ---
 
 ### 12.5 Hạn chế
 
-> - **Độ phân giải thấp:** Ảnh 100×100 pixels hạn chế khả năng phân biệt chi tiết texture.
-> - **Dataset studio:** Fruits-360 chụp trong môi trường kiểm soát (nền trắng, ánh sáng chuẩn). Mô hình có thể hoạt động kém trên ảnh chụp ngoài thực tế.
-> - **Số lớp hạn chế:** Chỉ phân loại được 15 loại trái cây đã huấn luyện. Không có cơ chế từ chối ảnh không thuộc 15 lớp.
+> - **Domain Shift (vấn đề chính):** Fruits-360 chụp trong môi trường kiểm soát (nền trắng, ánh sáng chuẩn). Model đạt 98.82% trên Fruits-360 nhưng hoạt động kém trên ảnh Google/ảnh thực tế (nền phức tạp, nhiều vật thể, ánh sáng đa dạng). Model đã học "quả táo + nền trắng" thay vì "quả táo trong mọi bối cảnh". Cách khắc phục: augmentation thay background, thêm ảnh thực tế vào train, CutOut/MixUp, Test-Time Augmentation.
+> - **Số lớp hạn chế:** Chỉ phân loại được 15 loại trái cây đã huấn luyện. Không có cơ chế từ chối ảnh không thuộc 15 lớp (Softmax luôn trả về 1 class).
 > - **Thiếu đa dạng trạng thái:** Dataset không chứa ảnh quả bị cắt, dập, hoặc chưa chín.
-> - **Thời gian huấn luyện:** ~30-40 phút trên CPU, tuy chấp nhận được nhưng có thể cải thiện nếu có GPU.
-> - **Giao diện hiển thị một số thông số chưa chính xác:** Sidebar của ứng dụng Streamlit hiển thị kích thước ảnh 128×128 và learning rate 0.0005, trong khi thực tế model sử dụng ảnh 160×160 và learning rate 0.001/0.0001. Đây là lỗi hiển thị, không ảnh hưởng đến chức năng.
+> - **Mất cân bằng test set:** Một số class có ít ảnh test (Blueberry: 154, Kiwi: 156, Watermelon: 157) do giới hạn của Fruits-360 Test gốc.
+> - **Thời gian huấn luyện:** ~45-60 phút trên CPU, tuy chấp nhận được nhưng có thể cải thiện nếu có GPU.
+> - **Giao diện:** Đã sửa toàn bộ thông số hiển thị trong sidebar và tab system info để khớp với config.py (IMG_SIZE, epochs, learning rate, model name).
 
 ---
 
@@ -924,19 +938,19 @@ Dưới đây là 10 câu tóm tắt để trả lời nhanh khi thuyết trình
 
 2. **Kiến trúc:** MobileNetV2 pre-trained trên ImageNet (không có top) + GlobalAveragePooling2D + Dense(128) + Dropout(0.4) + Softmax(15).
 
-3. **Tiền xử lý:** Ảnh được resize về 160×160 pixels và chuẩn hóa về khoảng [-1, 1] bằng hàm `preprocess_input` của MobileNetV2.
+3. **Tiền xử lý:** Ảnh được resize về 224×224 pixels và chuẩn hóa về khoảng [-1, 1] bằng hàm `preprocess_input` của MobileNetV2.
 
 4. **Augmentation:** Áp dụng 7 phép biến đổi cho tập train (xoay ±30°, zoom 0.7-1.3x, dịch ±15%, lật ngang, độ sáng 0.7-1.3x, kéo nghiêng 10°) để chống overfitting.
 
-5. **Huấn luyện 2 pha:** Pha 1 huấn luyện classification head với base đóng băng (lr=0.001, tối đa 25 epoch). Pha 2 fine-tune 25% lớp cuối của MobileNetV2 (lr=0.0001, tối đa 7 epoch).
+5. **Huấn luyện 2 pha:** Pha 1 huấn luyện classification head với base đóng băng (lr=0.001, tối đa 20 epoch). Pha 2 fine-tune 35% lớp cuối của MobileNetV2 (lr=0.00003, tối đa 10 epoch).
 
 6. **Callback:** EarlyStopping (dừng nếu val_loss không giảm 5 epoch), ReduceLROnPlateau (giảm lr khi plateau), ModelCheckpoint (lưu model tốt nhất).
 
-7. **Dữ liệu:** Train 70%, validation 30% từ Training gốc (~4200 ảnh). Test từ thư mục Test gốc (5034 ảnh), hoàn toàn tách biệt — không data leakage.
+7. **Dữ liệu:** Train 80%, validation 20% từ Training gốc (~12000 ảnh với MAX_IMAGES_PER_CLASS=1000). Ảnh được lấy cân bằng từ tất cả folder biến thể. Test từ thư mục Test gốc, hoàn toàn tách biệt — không data leakage.
 
-8. **Kết quả:** 68.28% accuracy trên test set. Macro F1 = 0.73. Lớp dễ nhất: Kiwi (F1=1.00). Lớp khó nhất: Peach (F1=0.35), Apple (F1=0.38).
+8. **Kết quả (mô hình cũ):** 68.28% accuracy trên test set. Macro F1 = 0.73. Kỳ vọng cải thiện với cấu hình mới (IMG_SIZE=224, cân bằng biến thể, fine-tune 35%).
 
-9. **Nguyên nhân chính của lỗi:** Ảnh 100×100 không đủ độ phân giải để phân biệt chi tiết giữa các quả tròn cùng màu (táo-đào-cherry) và dataset nền trắng đồng nhất khiến model không tổng quát tốt ra ảnh thực tế.
+9. **Nguyên nhân chính của lỗi:** Ảnh 100×100 không đủ độ phân giải để phân biệt chi tiết giữa các quả tròn cùng màu (táo-đào-cherry). Giải pháp: resize lên 224×224, tăng số ảnh/class, và lấy cân bằng từ mọi folder biến thể.
 
 10. **So với baseline:** Transfer Learning MobileNetV2 (68.28%) cải thiện +15% accuracy so với CNN tự xây dựng (53.30%), chứng tỏ hiệu quả của việc tận dụng pre-trained weights.
 

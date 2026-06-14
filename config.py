@@ -10,29 +10,41 @@ import os
 # ========================
 
 # Kích thước ảnh đầu vào cho model (pixel x pixel)
-IMG_SIZE = 160
+IMG_SIZE = 224
 
 # Batch size - số ảnh xử lý trong mỗi lần cập nhật gradient
-BATCH_SIZE = 32
+BATCH_SIZE = 16
 
-# Số epoch huấn luyện Phase 1
-EPOCHS = 25
+# Số epoch huấn luyện Phase 1 (classification head)
+EPOCHS = 20
 
 # Số epoch fine-tune (mở khóa base model)
-FINE_TUNE_EPOCHS = 7
+FINE_TUNE_EPOCHS = 10
 
 # Số class cần phân loại
 NUM_CLASSES = 15
 
-# Số ảnh tối đa lấy từ mỗi class (để phù hợp với máy cá nhân)
-MAX_IMAGES_PER_CLASS = 400
+# Số ảnh tối đa lấy từ mỗi class cho pilot (để phù hợp với máy cá nhân)
+MAX_IMAGES_PER_CLASS = 1000
+
+# Learning rate cho Phase 1 (train classification head)
+PHASE1_LR = 0.001
+
+# Learning rate cho Phase 2 (fine-tune base model)
+PHASE2_LR = 0.00003
+
+# Tỷ lệ lớp cuối của base model được fine-tune (0.35 = 35%)
+FINE_TUNE_RATIO = 0.35
+
+# Ngưỡng confidence thấp để cảnh báo khi dự đoán
+LOW_CONFIDENCE_THRESHOLD = 0.70
 
 # ========================
 # Tỷ lệ chia dữ liệu
 # ========================
 
 # Tỷ lệ train (validation = 1 - train_ratio)
-TRAIN_RATIO = 0.7
+TRAIN_RATIO = 0.8
 
 # ========================
 # Danh sách class và folder nguồn

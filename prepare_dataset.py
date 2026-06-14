@@ -16,7 +16,7 @@ from config import (
     RAW_TRAIN_DIR, RAW_TEST_DIR,
     SELECTED_DIR, TRAIN_DIR, VALIDATION_DIR, TEST_DIR,
     SOURCE_FOLDERS, CLASS_NAMES,
-    MAX_IMAGES_PER_CLASS,
+    MAX_IMAGES_PER_CLASS, IMG_SIZE,
     TRAIN_RATIO
 )
 
@@ -89,20 +89,24 @@ def clean_directories():
 
 def copy_images_to_selected():
     """
-    Copy anh TU TRAINING goc vao dataset/selected.
-    KHONG tron voi Test - Test se duoc xu ly rieng.
+    Copy ảnh TỪ TRAINING gốc vào dataset/selected.
+    KHÔNG trộn với Test - Test sẽ được xử lý riêng.
 
-    Voi moi class:
-    - Tim folder tuong ung trong RAW_TRAIN_DIR.
-    - Copy toi da MAX_IMAGES_PER_CLASS anh vao dataset/selected/<class_name>.
-    - Neu khong tim thay folder, in canh bao chi tiet.
+    Với mỗi class:
+    - Đọc tất cả ảnh từ mọi folder nguồn có tồn tại.
+    - Shuffle ảnh trong từng folder.
+    - Chia quota đều cho các folder.
+    - Nếu folder nào thiếu ảnh thì phân bổ phần còn thiếu cho các folder còn dư.
+    - In summary chi tiết số ảnh lấy từ từng folder biến thể.
 
     Returns:
-        dict: Thong ke so anh da copy cho moi class.
+        dict: Thống kê số ảnh đã copy cho mỗi class, kèm chi tiết từng folder.
     """
     print("\n" + "=" * 60)
-    print("COPY ANH TU TRAINING VAO SELECTED")
+    print("COPY ẢNH TỪ TRAINING VÀO SELECTED")
     print("=" * 60)
+    print(f"MAX_IMAGES_PER_CLASS = {MAX_IMAGES_PER_CLASS}")
+    print("Chiến lược: chia đều quota cho các folder biến thể, shuffle trong folder.\n")
 
     stats = {}
     all_found = True
@@ -112,25 +116,89 @@ def copy_images_to_selected():
         os.makedirs(dest_dir, exist_ok=True)
 
         source_folder_names = SOURCE_FOLDERS.get(class_name, [])
-        copied_count = 0
-        found_any = False
 
+        # Bước 1: Đọc tất cả ảnh từ mọi folder nguồn tồn tại
+        folder_images = {}  # {folder_name: [list of image filenames]}
         for folder_name in source_folder_names:
-            # CHI tim trong Training, KHONG tron voi Test
             source_dir = os.path.join(RAW_TRAIN_DIR, folder_name)
-
             if not os.path.exists(source_dir):
                 continue
-
-            found_any = True
             images = [f for f in os.listdir(source_dir)
                       if f.lower().endswith(('.jpg', '.jpeg', '.png'))]
+            if images:
+                folder_images[folder_name] = images
 
-            for img_name in images:
-                if copied_count >= MAX_IMAGES_PER_CLASS:
-                    break
+        if not folder_images:
+            all_found = False
+            stats[class_name] = {"total": 0, "folders": {}}
+            print(f"\n[CẢNH BÁO] Không tìm thấy folder cho class '{class_name}'!")
+            print(f"  Đã tìm các folder: {source_folder_names}")
+            print(f"  Trong Training: {RAW_TRAIN_DIR}")
+            print(f"  => Hãy kiểm tra và sửa SOURCE_FOLDERS trong config.py")
+            if os.path.exists(RAW_TRAIN_DIR):
+                print(f"  => Các folder hiện có trong Training:")
+                for f in sorted(os.listdir(RAW_TRAIN_DIR)):
+                    if os.path.isdir(os.path.join(RAW_TRAIN_DIR, f)):
+                        print(f"       - {f}")
+            continue
 
-                src_path = os.path.join(source_dir, img_name)
+        num_folders = len(folder_images)
+
+        # Bước 2: Shuffle ảnh trong từng folder
+        for folder_name in folder_images:
+            random.shuffle(folder_images[folder_name])
+
+        # Bước 3: Phân bổ quota đều cho các folder
+        base_quota = MAX_IMAGES_PER_CLASS // num_folders
+        remaining = MAX_IMAGES_PER_CLASS - base_quota * num_folders
+
+        # Phân bổ ban đầu
+        quotas = {}
+        for i, folder_name in enumerate(folder_images):
+            quotas[folder_name] = base_quota + (1 if i < remaining else 0)
+
+        # Bước 4: Điều chỉnh quota - folder nào thiếu thì phân bổ cho folder dư
+        # Lặp đến khi không còn thay đổi
+        changed = True
+        while changed:
+            changed = False
+            # Tìm folder thiếu (có ít ảnh hơn quota) và folder dư (có nhiều hơn quota)
+            deficit_total = 0
+            surplus_folders = []
+            for folder_name in folder_images:
+                available = len(folder_images[folder_name])
+                quota = quotas[folder_name]
+                if available < quota:
+                    deficit_total += quota - available
+                    quotas[folder_name] = available  # Gán lại = số ảnh thực có
+                elif available > quota:
+                    surplus_folders.append((folder_name, available - quota))
+
+            if deficit_total > 0 and surplus_folders:
+                changed = True
+                # Phân bổ deficit cho các folder dư, mỗi folder thêm tối đa phần dư của nó
+                for folder_name, surplus in surplus_folders:
+                    if deficit_total <= 0:
+                        break
+                    add = min(surplus, deficit_total)
+                    quotas[folder_name] += add
+                    deficit_total -= add
+
+        # Bước 5: Copy ảnh theo quota đã điều chỉnh
+        folder_detail = {}
+        total_copied = 0
+
+        for folder_name in source_folder_names:
+            if folder_name not in folder_images:
+                folder_detail[folder_name] = {"available": 0, "copied": 0, "exists": False}
+                continue
+
+            available = len(folder_images[folder_name])
+            quota = quotas.get(folder_name, 0)
+            copied = 0
+
+            for img_name in folder_images[folder_name][:quota]:
+                src_path = os.path.join(RAW_TRAIN_DIR, folder_name, img_name)
                 dst_path = os.path.join(dest_dir, img_name)
 
                 base, ext = os.path.splitext(img_name)
@@ -138,31 +206,29 @@ def copy_images_to_selected():
                     dst_path = os.path.join(dest_dir, f"{base}_{folder_name}{ext}")
 
                 shutil.copy2(src_path, dst_path)
-                copied_count += 1
+                copied += 1
 
-            if copied_count >= MAX_IMAGES_PER_CLASS:
-                break
+            total_copied += copied
+            folder_detail[folder_name] = {"available": available, "copied": copied, "exists": True}
 
-        stats[class_name] = copied_count
+        stats[class_name] = {"total": total_copied, "folders": folder_detail}
 
-        if not found_any:
-            all_found = False
-            print(f"\n[CẢNH BÁO] Khong tim thay folder cho class '{class_name}'!")
-            print(f"  Da tim cac folder: {source_folder_names}")
-            print(f"  Trong Training: {RAW_TRAIN_DIR}")
-            print(f"  => Hay kiem tra va sua SOURCE_FOLDERS trong config.py")
-            print(f"  => Cac folder hien co trong Training:")
-            if os.path.exists(RAW_TRAIN_DIR):
-                for f in sorted(os.listdir(RAW_TRAIN_DIR)):
-                    if os.path.isdir(os.path.join(RAW_TRAIN_DIR, f)):
-                        print(f"       - {f}")
-        else:
-            print(f"  [{class_name}] Da copy {copied_count} anh")
+        # In chi tiết
+        print(f"  [{class_name}] Tổng: {total_copied}/{MAX_IMAGES_PER_CLASS} ảnh "
+              f"(từ {num_folders} folder biến thể)")
+        for folder_name in source_folder_names:
+            if folder_name in folder_detail:
+                fd = folder_detail[folder_name]
+                if fd["exists"]:
+                    print(f"      {folder_name:<35} có {fd['available']:>5} ảnh → lấy {fd['copied']:>5}")
+                else:
+                    print(f"      {folder_name:<35} [KHÔNG TỒN TẠI]")
+        print()
 
     if not all_found:
         print("\n" + "!" * 60)
-        print("KHONG TIM THAY MOT SO FOLDER!")
-        print("Hay sua SOURCE_FOLDERS trong config.py cho dung voi dataset cua ban.")
+        print("KHÔNG TÌM THẤY MỘT SỐ FOLDER!")
+        print("Hãy sửa SOURCE_FOLDERS trong config.py cho đúng với dataset của bạn.")
         print("!" * 60)
 
     return stats
@@ -170,18 +236,22 @@ def copy_images_to_selected():
 
 def copy_test_from_raw():
     """
-    Copy anh TU TEST GOC vao dataset/test (test that, khong tron voi train).
-    
-    Voi moi class:
-    - Tim folder tuong ung trong RAW_TEST_DIR.
-    - Copy toi da MAX_IMAGES_PER_CLASS anh vao dataset/test/<class_name>.
+    Copy ảnh TỪ TEST GỐC vào dataset/test (test thật, không trộn với train).
+
+    Với mỗi class:
+    - Đọc tất cả ảnh từ mọi folder nguồn có tồn tại trong RAW_TEST_DIR.
+    - Shuffle ảnh trong từng folder.
+    - Chia quota đều cho các folder (giống logic copy_images_to_selected).
+    - In summary chi tiết số ảnh lấy từ từng folder biến thể.
 
     Returns:
-        dict: Thong ke so anh test cho moi class.
+        dict: Thống kê số ảnh test cho mỗi class, kèm chi tiết từng folder.
     """
     print("\n" + "=" * 60)
-    print("COPY ANH TU TEST GOC VAO DATASET/TEST")
+    print("COPY ẢNH TỪ TEST GỐC VÀO DATASET/TEST")
     print("=" * 60)
+    print(f"MAX_IMAGES_PER_CLASS = {MAX_IMAGES_PER_CLASS}")
+    print("Chiến lược: chia đều quota cho các folder biến thể, shuffle trong folder.\n")
 
     test_stats = {}
 
@@ -190,22 +260,76 @@ def copy_test_from_raw():
         os.makedirs(dest_dir, exist_ok=True)
 
         source_folder_names = SOURCE_FOLDERS.get(class_name, [])
-        copied_count = 0
 
+        # Bước 1: Đọc tất cả ảnh từ mọi folder nguồn tồn tại trong Test
+        folder_images = {}
         for folder_name in source_folder_names:
             source_dir = os.path.join(RAW_TEST_DIR, folder_name)
-
             if not os.path.exists(source_dir):
                 continue
-
             images = [f for f in os.listdir(source_dir)
                       if f.lower().endswith(('.jpg', '.jpeg', '.png'))]
+            if images:
+                folder_images[folder_name] = images
 
-            for img_name in images:
-                if copied_count >= MAX_IMAGES_PER_CLASS:
-                    break
+        if not folder_images:
+            test_stats[class_name] = {"total": 0, "folders": {}}
+            print(f"  [{class_name}] Test: KHÔNG tìm thấy folder nào trong Test gốc")
+            continue
 
-                src_path = os.path.join(source_dir, img_name)
+        num_folders = len(folder_images)
+
+        # Bước 2: Shuffle ảnh trong từng folder
+        for folder_name in folder_images:
+            random.shuffle(folder_images[folder_name])
+
+        # Bước 3: Phân bổ quota đều
+        base_quota = MAX_IMAGES_PER_CLASS // num_folders
+        remaining = MAX_IMAGES_PER_CLASS - base_quota * num_folders
+
+        quotas = {}
+        for i, folder_name in enumerate(folder_images):
+            quotas[folder_name] = base_quota + (1 if i < remaining else 0)
+
+        # Bước 4: Điều chỉnh quota - folder thiếu → phân bổ cho folder dư
+        changed = True
+        while changed:
+            changed = False
+            deficit_total = 0
+            surplus_folders = []
+            for folder_name in folder_images:
+                available = len(folder_images[folder_name])
+                quota = quotas[folder_name]
+                if available < quota:
+                    deficit_total += quota - available
+                    quotas[folder_name] = available
+                elif available > quota:
+                    surplus_folders.append((folder_name, available - quota))
+
+            if deficit_total > 0 and surplus_folders:
+                changed = True
+                for folder_name, surplus in surplus_folders:
+                    if deficit_total <= 0:
+                        break
+                    add = min(surplus, deficit_total)
+                    quotas[folder_name] += add
+                    deficit_total -= add
+
+        # Bước 5: Copy ảnh theo quota
+        folder_detail = {}
+        total_copied = 0
+
+        for folder_name in source_folder_names:
+            if folder_name not in folder_images:
+                folder_detail[folder_name] = {"available": 0, "copied": 0, "exists": False}
+                continue
+
+            available = len(folder_images[folder_name])
+            quota = quotas.get(folder_name, 0)
+            copied = 0
+
+            for img_name in folder_images[folder_name][:quota]:
+                src_path = os.path.join(RAW_TEST_DIR, folder_name, img_name)
                 dst_path = os.path.join(dest_dir, img_name)
 
                 base, ext = os.path.splitext(img_name)
@@ -213,13 +337,24 @@ def copy_test_from_raw():
                     dst_path = os.path.join(dest_dir, f"{base}_{folder_name}{ext}")
 
                 shutil.copy2(src_path, dst_path)
-                copied_count += 1
+                copied += 1
 
-            if copied_count >= MAX_IMAGES_PER_CLASS:
-                break
+            total_copied += copied
+            folder_detail[folder_name] = {"available": available, "copied": copied, "exists": True}
 
-        test_stats[class_name] = copied_count
-        print(f"  [{class_name}] Test: {copied_count} anh")
+        test_stats[class_name] = {"total": total_copied, "folders": folder_detail}
+
+        # In chi tiết
+        print(f"  [{class_name}] Test: {total_copied}/{MAX_IMAGES_PER_CLASS} ảnh "
+              f"(từ {num_folders} folder)")
+        for folder_name in source_folder_names:
+            if folder_name in folder_detail:
+                fd = folder_detail[folder_name]
+                if fd["exists"]:
+                    print(f"      {folder_name:<35} có {fd['available']:>5} ảnh → lấy {fd['copied']:>5}")
+                else:
+                    print(f"      {folder_name:<35} [KHÔNG TỒN TẠI]")
+        print()
 
     return test_stats
 
@@ -286,15 +421,15 @@ def split_train_validation():
 
 def print_summary(selected_stats, split_stats, test_stats):
     """
-    In bang tong ket du lieu.
+    In bảng tổng kết dữ liệu.
 
     Args:
-        selected_stats: Thong ke anh trong selected (tu Training goc).
-        split_stats: Thong ke anh train/val.
-        test_stats: Thong ke anh test (tu Test goc).
+        selected_stats: Thống kê ảnh trong selected (từ Training gốc) - dict {class: {total, folders}}.
+        split_stats: Thống kê ảnh train/val.
+        test_stats: Thống kê ảnh test (từ Test gốc) - dict {class: {total, folders}}.
     """
     print("\n" + "=" * 60)
-    print("TONG KET DU LIEU")
+    print("TỔNG KẾT DỮ LIỆU")
     print("=" * 60)
     print(f"{'Class':<15} {'Selected':<12} {'Train':<10} {'Val':<10} {'Test':<10}")
     print("-" * 57)
@@ -305,11 +440,13 @@ def print_summary(selected_stats, split_stats, test_stats):
     total_test = 0
 
     for class_name in CLASS_NAMES:
-        sel = selected_stats.get(class_name, 0)
+        sel_info = selected_stats.get(class_name, {"total": 0})
+        sel = sel_info["total"] if isinstance(sel_info, dict) else sel_info
         sp = split_stats.get(class_name, {"train": 0, "val": 0})
         train = sp["train"]
         val = sp["val"]
-        test = test_stats.get(class_name, 0)
+        test_info = test_stats.get(class_name, {"total": 0})
+        test = test_info["total"] if isinstance(test_info, dict) else test_info
 
         total_selected += sel
         total_train += train
@@ -319,10 +456,13 @@ def print_summary(selected_stats, split_stats, test_stats):
         print(f"{class_name:<15} {sel:<12} {train:<10} {val:<10} {test:<10}")
 
     print("-" * 57)
-    print(f"{'TONG':<15} {total_selected:<12} {total_train:<10} "
+    print(f"{'TỔNG':<15} {total_selected:<12} {total_train:<10} "
           f"{total_val:<10} {total_test:<10}")
-    print(f"\nTrain + Val (tu Training goc): {total_train + total_val}")
-    print(f"Test (tu Test goc - KHONG tron): {total_test}")
+    print(f"\nTrain + Val (từ Training gốc): {total_train + total_val}")
+    print(f"Test (từ Test gốc - KHÔNG trộn): {total_test}")
+    print(f"\nTỷ lệ Train/Val: {TRAIN_RATIO}/{1-TRAIN_RATIO:.2f}")
+    print(f"MAX_IMAGES_PER_CLASS: {MAX_IMAGES_PER_CLASS}")
+    print(f"IMG_SIZE: {IMG_SIZE}")
 
 
 def main():
@@ -345,7 +485,11 @@ def main():
     selected_stats = copy_images_to_selected()
 
     # Kiem tra co class nao khong co anh khong
-    if all(count == 0 for count in selected_stats.values()):
+    all_zero = all(
+        (info["total"] if isinstance(info, dict) else info) == 0
+        for info in selected_stats.values()
+    )
+    if all_zero:
         print("\n[LOI NGHIEM TRONG] Khong copy duoc anh nao!")
         print("Hay kiem tra SOURCE_FOLDERS trong config.py.")
         return

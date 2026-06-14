@@ -34,6 +34,7 @@ from tensorflow.keras.applications.mobilenet_v2 import preprocess_input
 from config import (
     TRAIN_DIR, VALIDATION_DIR,
     IMG_SIZE, BATCH_SIZE, EPOCHS, FINE_TUNE_EPOCHS, NUM_CLASSES,
+    PHASE1_LR, PHASE2_LR, FINE_TUNE_RATIO,
     MODEL_DIR, MODEL_PATH, CLASS_INDICES_PATH,
     RESULTS_DIR,
     AUGMENTATION_CONFIG
@@ -103,10 +104,10 @@ def build_mobilenetv2_model():
     - Base: MobileNetV2 (pre-trained trên ImageNet, 1.4M ảnh).
     - Head: GlobalAveragePooling + Dense(128) + Dropout(0.4) + Softmax(15).
 
-    Base được đóng băng ban đầu, sau đó fine-tune 30% lớp cuối.
+    Base được đóng băng ban đầu, sau đó fine-tune FINE_TUNE_RATIO lớp cuối.
 
     Returns:
-        tf.keras.Model: Mô hình đã compile.
+        tuple: (tf.keras.Model, base_model)
     """
     print("\nĐang tải MobileNetV2 pre-trained (ImageNet)...")
 
@@ -137,14 +138,15 @@ def build_mobilenetv2_model():
 
     # Compile
     model.compile(
-        optimizer=Adam(learning_rate=0.001),
+        optimizer=Adam(learning_rate=PHASE1_LR),
         loss='categorical_crossentropy',
         metrics=['accuracy']
     )
 
     print(f"\n  Tổng số lớp: {len(model.layers)}")
+    print(f"  Phase 1 LR: {PHASE1_LR}")
     print(f"  Trainable params (phase 1): "
-          f"{model.trainable_weights}")
+          f"{len(model.trainable_weights)}")
     model.summary()
 
     return model, base_model
@@ -212,7 +214,7 @@ def train_phase1_head(model, train_gen, val_gen):
 
 def train_phase2_finetune(model, base_model, train_gen, val_gen):
     """
-    Phase 2: Fine-tune 30% lớp cuối của MobileNetV2.
+    Phase 2: Fine-tune FINE_TUNE_RATIO*100% lớp cuối của MobileNetV2.
 
     Args:
         model: Model đã train phase 1.
@@ -226,8 +228,8 @@ def train_phase2_finetune(model, base_model, train_gen, val_gen):
     # Mở khóa base model
     base_model.trainable = True
 
-    # Chỉ fine-tune 25% lớp cuối của base (cân bằng)
-    fine_tune_at = int(len(base_model.layers) * 0.75)
+    # Chỉ fine-tune FINE_TUNE_RATIO lớp cuối của base
+    fine_tune_at = int(len(base_model.layers) * (1 - FINE_TUNE_RATIO))
     for layer in base_model.layers[:fine_tune_at]:
         layer.trainable = False
 
@@ -235,16 +237,18 @@ def train_phase2_finetune(model, base_model, train_gen, val_gen):
     print("PHASE 2: FINE-TUNE BASE MODEL")
     print("=" * 60)
     print(f"  Tổng lớp base: {len(base_model.layers)}")
-    print(f"  Fine-tune từ lớp: {fine_tune_at}")
+    print(f"  Fine-tune từ lớp: {fine_tune_at} ({FINE_TUNE_RATIO*100:.0f}% lớp cuối)")
     print(f"  Số lớp trainable trong base: "
           f"{sum(1 for l in base_model.layers if l.trainable)}")
 
-    # Compile lại với learning rate thấp hơn
+    # Compile lại với learning rate thấp hơn (từ config)
     model.compile(
-        optimizer=Adam(learning_rate=0.0001),
+        optimizer=Adam(learning_rate=PHASE2_LR),
         loss='categorical_crossentropy',
         metrics=['accuracy']
     )
+
+    print(f"  Phase 2 LR: {PHASE2_LR}")
 
     steps_per_epoch = len(train_gen)
     validation_steps = len(val_gen)

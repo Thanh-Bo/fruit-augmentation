@@ -12,7 +12,7 @@ Xây dựng ứng dụng sử dụng **Transfer Learning với MobileNetV2** k�
 
 ### Vì sao chọn bản 100x100?
 
-Bản `fruits-360_100x100` (ảnh 100x100) có dung lượng nhẹ hơn bản gốc (100MB vs ~1GB), phù hợp với máy cá nhân có CPU Intel Core i5, RAM 16GB, không có GPU NVIDIA.
+Bản `fruits-360_100x100` (ảnh 100x100) có dung lượng nhẹ hơn bản gốc (100MB vs ~1GB), phù hợp với máy cá nhân có CPU Intel Core i5, RAM 16GB, không có GPU NVIDIA. Model sẽ resize ảnh về 224x224 trước khi đưa vào MobileNetV2 — đây là kích thước tiêu chuẩn của ImageNet, giúp tận dụng tối đa pre-trained weights.
 
 ## 15 Lớp sử dụng
 
@@ -84,8 +84,8 @@ fruit_augmentation_classification/
 │   │   ├── Strawberry/
 │   │   └── Watermelon/
 │   │
-│   ├── train/                    <-- Dữ liệu train (70%)
-│   ├── validation/               <-- Dữ liệu validation (30%)
+│   ├── train/                    <-- Dữ liệu train (80%)
+│   ├── validation/               <-- Dữ liệu validation (20%)
 │   └── test/                     <-- Dữ liệu test (từ Test gốc, KHÔNG trộn)
 │
 ├── model/
@@ -170,9 +170,18 @@ Script này sẽ:
 - Kiểm tra `fruits-360_100x100/fruits-360/Training/` và `Test/` có tồn tại không
 - Tìm các folder tương ứng với 15 class trong dataset
 - Nếu không tìm thấy folder nào, sẽ in cảnh báo kèm danh sách folder hiện có để bạn sửa `config.py`
-- Copy tối đa 400 ảnh/class vào `dataset/selected/`
-- Chia selected thành train (70%) và validation (30%)
-- Copy ảnh từ Test gốc vào `dataset/test/` (test thật, không trộn với train)
+- **Copy ảnh cân bằng từ TẤT CẢ folder biến thể**: Với mỗi class, chia đều quota cho các folder nguồn (vd: Apple có 30+ folder → mỗi folder được lấy số ảnh bằng nhau). Folder nào thiếu thì phần còn lại phân bổ cho folder dư. In chi tiết số ảnh lấy từ từng folder.
+- Chia selected thành train (80%) và validation (20%)
+- Copy ảnh từ Test gốc vào `dataset/test/` (test thật, không trộn với train), cũng cân bằng giữa các folder
+
+**Tại sao cần cân bằng folder biến thể?**
+
+Phiên bản cũ lấy 400 ảnh/class bằng cách duyệt folder theo thứ tự và dừng khi đủ. Điều này gây ra:
+1. **Học vẹt (memorization)**: Model chỉ thấy 1-2 biến thể đầu tiên, không thấy các biến thể khác → khi gặp biến thể mới trong test, model thất bại.
+2. **Lệch phân phối**: Ví dụ Apple có 30+ folder (Apple Red, Apple Golden, Apple Granny Smith...), nhưng chỉ lấy từ 2-3 folder đầu → model không học được sự đa dạng của táo.
+3. **Accuracy thấp ở class đa dạng**: Trước khi cân bằng, Apple (F1=0.38), Peach (F1=0.35) là các class có F1 thấp nhất. Sau cải thiện, tất cả class đều có F1 >= 0.955.
+
+Giải pháp: Chia đều quota 1000 ảnh cho tất cả folder biến thể, shuffle ảnh trong từng folder → model thấy được sự đa dạng thực sự của mỗi class.
 
 **Lưu ý**: Nếu script báo không tìm thấy folder, mở `config.py` và sửa `SOURCE_FOLDERS` cho đúng tên folder thực tế.
 
@@ -188,16 +197,16 @@ Quá trình huấn luyện (2 pha tự động):
 - **Phase 1 — Huấn luyện Classification Head (base đóng băng)**:
   - Chỉ các lớp Dense mới được huấn luyện (~130K tham số)
   - Base MobileNetV2 trích xuất đặc trưng từ ảnh
-  - Tối đa 25 epoch, có EarlyStopping (patience=5)
+  - Tối đa 20 epoch, có EarlyStopping (patience=5)
   - ReduceLROnPlateau: giảm learning rate khi val_loss ngừng cải thiện
 - **Phase 2 — Fine-tune Base Model**:
-  - Mở khóa 20% lớp cuối của MobileNetV2
-  - Huấn luyện với learning rate thấp (0.0001)
-  - Tối đa 7 epoch, có EarlyStopping (patience=5)
+  - Mở khóa 35% lớp cuối của MobileNetV2
+  - Huấn luyện với learning rate rất thấp (0.00003)
+  - Tối đa 10 epoch, có EarlyStopping (patience=5)
 - ModelCheckpoint: lưu model tốt nhất vào `model/fruit_cnn_model.h5`
 - Lưu biểu đồ accuracy/loss vào `results/accuracy_loss.png` (có đánh dấu điểm bắt đầu fine-tune)
 
-Thời gian ước tính: 25-40 phút trên CPU (i5-13500H, 16GB RAM).
+Thời gian ước tính: 45-60 phút trên CPU (i5-13500H, 16GB RAM).
 
 Lần chạy đầu tiên sẽ tự động tải MobileNetV2 weights (~14MB) từ internet.
 
@@ -310,26 +319,39 @@ Output: Xác suất 15 class
 
 | Pha | Mô tả | Epoch |
 |-----|-------|-------|
-| **Phase 1** | Huấn luyện Classification Head (base đóng băng) | 25 (có EarlyStopping) |
-| **Phase 2** | Fine-tune 25% lớp cuối của MobileNetV2 | 7 (có EarlyStopping) |
+| **Phase 1** | Huấn luyện Classification Head (base đóng băng) | 20 (có EarlyStopping) |
+| **Phase 2** | Fine-tune 35% lớp cuối của MobileNetV2 | 10 (có EarlyStopping) |
 
 - **Phase 1**: Chỉ các lớp Dense mới được huấn luyện. Base MobileNetV2 hoạt động như "máy ảnh thông minh" trích xuất đặc trưng.
-- **Phase 2**: Mở khóa 25% lớp cuối của MobileNetV2, huấn luyện với learning rate rất thấp (0.0001) để thích nghi đặc trưng với ảnh trái cây.
+- **Phase 2**: Mở khóa 35% lớp cuối của MobileNetV2, huấn luyện với learning rate rất thấp (0.00003) để thích nghi đặc trưng với ảnh trái cây.
 
-### Thông số huấn luyện
+### Thông số huấn luyện (Pilot)
 
 | Tham số | Giá trị | Ghi chú |
 |---------|---------|---------|
-| Kích thước ảnh đầu vào | 160×160 pixels | Upscale từ 100×100 |
-| Batch size | 32 | |
-| Phase 1 epochs | 25 | Có EarlyStopping (patience=5) |
-| Phase 2 epochs | 7 | Có EarlyStopping (patience=5) |
-| Optimizer | Adam | Phase 1: lr=0.001, Phase 2: lr=0.0001 |
+| Kích thước ảnh đầu vào | 224×224 pixels | Upscale từ 100×100, chuẩn ImageNet |
+| Batch size | 16 | Giảm để tránh OOM trên CPU |
+| Phase 1 epochs | 20 | Có EarlyStopping (patience=5) |
+| Phase 2 epochs | 10 | Fine-tune, có EarlyStopping (patience=5) |
+| Optimizer | Adam | Phase 1: lr=0.001, Phase 2: lr=0.00003 |
 | Dropout | 0.4 | Trên classification head |
-| Fine-tune layers | 25% lớp cuối | ~40 lớp được mở khóa |
+| Fine-tune layers | 35% lớp cuối | ~54 lớp được mở khóa |
 | Số lớp | 15 | Apple, Avocado, Banana, Blueberry, Cherry, Grape, Kiwi, Lemon, Mango, Orange, Peach, Pear, Pineapple, Strawberry, Watermelon |
-| Ảnh/class | Tối đa 400 | Train 70% (~280 ảnh), Validation 30% (~120 ảnh) |
-| Thời gian huấn luyện | ~30-40 phút | Trên CPU i5-13500H, 16GB RAM |
+| Ảnh/class (Pilot) | Tối đa 1000 | Train 80% (~800 ảnh), Validation 20% (~200 ảnh) |
+| Thời gian huấn luyện | ~45-60 phút | Trên CPU i5-13500H, 16GB RAM |
+
+### Cấu hình Final (gợi ý sau pilot)
+
+| Tham số | Giá trị Pilot | Giá trị Final |
+|---------|---------------|---------------|
+| MAX_IMAGES_PER_CLASS | 1000 | 2000 |
+| IMG_SIZE | 224 | 224 |
+| BATCH_SIZE | 16 | 16 |
+| EPOCHS | 20 | 40 |
+| FINE_TUNE_EPOCHS | 10 | 25 |
+| PHASE1_LR | 0.001 | 0.001 |
+| PHASE2_LR | 0.00003 | 0.00001 |
+| FINE_TUNE_RATIO | 0.35 | 0.40 |
 
 ---
 
@@ -375,62 +397,95 @@ Bảng thể hiện số lượng dự đoán đúng/sai cho từng class.
 ## Lưu ý
 
 1. **Mô hình chỉ phân loại được 15 class đã huấn luyện**: Apple, Avocado, Banana, Blueberry, Cherry, Grape, Kiwi, Lemon, Mango, Orange, Peach, Pear, Pineapple, Strawberry, Watermelon.
-2. **Nếu upload ảnh trái cây khác** (ví dụ: sầu riêng, mít, xoài tượng), mô hình vẫn sẽ cố gắng dự đoán thành một trong 15 class trên.
+2. **Nếu upload ảnh trái cây khác** (ví dụ: sầu riêng, mít, xoài tượng), mô hình vẫn sẽ cố gắng dự đoán thành một trong 15 class trên. Ứng dụng sẽ hiển thị cảnh báo nếu confidence < 70%.
 3. **Ảnh nên chụp rõ nét**, trái cây ở giữa khung hình, nền đơn giản để có kết quả tốt nhất.
 4. **Nếu không tìm thấy folder**: Kiểm tra và sửa `SOURCE_FOLDERS` trong `config.py` cho khớp với dataset của bạn.
 5. **Khi chạy lại prepare_dataset.py**: Script sẽ tự động xóa dữ liệu cũ trong `dataset/selected/`, `train/`, `validation/`, `test/` để tránh trùng lặp.
 
----
+## Quy trình an toàn (khuyến nghị)
 
-## Hướng phát triển
+Để đạt accuracy tốt nhất, làm theo quy trình sau:
 
-- **Thử nghiệm các kiến trúc khác**: EfficientNetB0, ResNet50 để so sánh hiệu năng
-- **Tăng độ phân giải ảnh**: Sử dụng bản Fruits-360 gốc (1000x1000) để cải thiện độ chính xác
-- **Cải thiện giao diện**: Thêm tính năng chụp ảnh từ webcam
-- **Triển khai ứng dụng**: Đưa lên Streamlit Cloud, Hugging Face Spaces
-- **Thêm chức năng**: Nhận diện độ chín của trái cây, phát hiện trái cây hỏng
-- **Grad-CAM Visualization**: Hiển thị vùng ảnh mà mô hình tập trung để đưa ra dự đoán
+```
+1. python prepare_dataset.py       # Chuẩn bị dataset cân bằng
+   → Kiểm tra summary: đảm bảo mỗi folder biến thể đều có ảnh được chọn
+   
+2. python train_model.py           # Train pilot (1000 ảnh/class, 20+10 epoch)
+   → Model lưu vào model/fruit_cnn_model.h5
+   
+3. python evaluate_model.py        # Đánh giá
+   → Xem class nào có F1 < 0.90 trong classification_report.txt
+   
+4. Nếu có class yếu → sửa config.py:
+   - Tăng MAX_IMAGES_PER_CLASS lên 2000
+   - Tăng EPOCHS lên 40, FINE_TUNE_EPOCHS lên 25
+   - Chạy lại prepare_dataset.py → train_model.py → evaluate_model.py
+   
+5. python predict.py               # Test ảnh đơn
+6. streamlit run app.py            # Demo
+```
 
----
+## Giới hạn của mô hình
 
-## Kết quả đánh giá mô hình
+**⚠️ Domain Shift:** Mô hình được huấn luyện **CHỈ trên Fruits-360** — dataset chụp trong studio với nền trắng, ánh sáng chuẩn:
+- **Accuracy 98.82% trên Fruits-360 Test không đảm bảo accuracy cao trên ảnh web/Google.**
+- Ảnh ngoài đời (nền phức tạp, ánh sáng khác nhau, góc chụp đa dạng) thuộc phân phối khác → model có thể dự đoán sai.
+- Softmax luôn trả về 1 trong 15 class — ngay cả khi ảnh không phải trái cây.
+- Ứng dụng sẽ cảnh báo nếu confidence < 70%.
 
-Mô hình đạt **68.28%** accuracy trên tập test (5034 ảnh).
+**Khắc phục domain shift:** Augmentation thay background, thêm ảnh Google vào train, CutOut/MixUp, Test-Time Augmentation. Xem `PROJECT_DOCUMENTATION.md` để biết chi tiết.
 
-### Tổng quan
+## Kết quả đánh giá mô hình (FINAL)
 
-| Chỉ số | Giá trị |
-|--------|---------|
-| Test Accuracy | 68.28% |
-| Macro Precision | 0.7579 |
-| Macro Recall | 0.7250 |
-| Macro F1-score | 0.7255 |
+Mô hình đạt **98.82% accuracy** trên tập test 9,804 ảnh, với Macro F1-score = 0.9907.
 
-### Chi tiết từng lớp
+### Bảng phân loại chi tiết
 
 | Class | Precision | Recall | F1-score | Support |
 |-------|-----------|--------|----------|---------|
-| Kiwi | 1.00 | 1.00 | 1.00 | 156 |
-| Strawberry | 0.99 | 1.00 | 0.99 | 400 |
-| Pineapple | 1.00 | 0.97 | 0.99 | 329 |
-| Watermelon | 0.96 | 1.00 | 0.98 | 157 |
-| Avocado | 0.96 | 0.99 | 0.97 | 400 |
-| Blueberry | 0.98 | 0.97 | 0.97 | 154 |
-| Banana | 1.00 | 0.66 | 0.80 | 400 |
-| Mango | 0.78 | 0.66 | 0.72 | 308 |
-| Pear | 0.54 | 0.74 | 0.63 | 400 |
-| Grape | 0.83 | 0.45 | 0.59 | 400 |
-| Lemon | 0.41 | 0.83 | 0.55 | 330 |
-| Orange | 0.74 | 0.40 | 0.52 | 400 |
-| Cherry | 0.46 | 0.43 | 0.44 | 400 |
-| Apple | 0.40 | 0.37 | 0.38 | 400 |
-| Peach | 0.31 | 0.41 | 0.35 | 400 |
+| Apple 🍎 | 0.9851 | 0.9270 | 0.9552 | 1,000 |
+| Avocado 🥑 | 1.0000 | 0.9940 | 0.9970 | 1,000 |
+| Banana 🍌 | 1.0000 | 0.9922 | 0.9961 | 645 |
+| Blueberry 🫐 | 0.9747 | 1.0000 | 0.9872 | 154 |
+| Cherry 🍒 | 0.9881 | 1.0000 | 0.9940 | 1,000 |
+| Grape 🍇 | 1.0000 | 1.0000 | 1.0000 | 1,000 |
+| Kiwi 🥝 | 1.0000 | 1.0000 | 1.0000 | 156 |
+| Lemon 🍋 | 0.9851 | 1.0000 | 0.9925 | 330 |
+| Mango 🥭 | 0.9904 | 1.0000 | 0.9952 | 308 |
+| Orange 🍊 | 0.9970 | 1.0000 | 0.9985 | 1,000 |
+| Peach 🍑 | 0.9520 | 0.9910 | 0.9711 | 1,000 |
+| Pear 🍐 | 0.9760 | 0.9770 | 0.9765 | 1,000 |
+| Pineapple 🍍 | 1.0000 | 1.0000 | 1.0000 | 329 |
+| Strawberry 🍓 | 1.0000 | 1.0000 | 1.0000 | 725 |
+| Watermelon 🍉 | 0.9937 | 1.0000 | 0.9968 | 157 |
 
-### Nhận xét
+- **Tổng Accuracy:** 98.82%
+- **Macro Precision:** 0.9895
+- **Macro Recall:** 0.9921
+- **Macro F1-score:** 0.9907
+- **Tất cả 15 class đều có F1-score >= 0.95**
 
-- **Các lớp dễ phân biệt** (Kiwi, Strawberry, Pineapple, Watermelon, Avocado, Blueberry): F1-score > 0.95, mô hình hoạt động rất tốt.
-- **Các lớp khó** (Apple, Peach, Cherry, Orange, Pear): Đây là các loại quả tròn, màu sắc tương đồng, bị giới hạn bởi độ phân giải 100×100 pixels. Đây là hạn chế của dataset, không phải của mô hình.
-- **So với Custom CNN ban đầu (53.30%)**: Transfer Learning MobileNetV2 cải thiện **+15%** accuracy.
+### Phân tích overfitting
+
+Mô hình **KHÔNG bị overfitting** vì:
+- Test set đến từ thư mục `Test/` gốc, **hoàn toàn tách biệt** với Training.
+- Fruits-360 là dataset "dễ" (nền trắng, ánh sáng chuẩn) — accuracy 95-99% là bình thường.
+- Sử dụng Transfer Learning với MobileNetV2 (pre-trained trên 1.4M ảnh ImageNet) → feature rất tổng quát.
+- Nhiều lớp regularization: Dropout(0.4), 8 kỹ thuật Augmentation, EarlyStopping, LR thấp ở Phase 2.
+- Per-class metrics đồng đều, pattern nhầm lẫn có ý nghĩa (Apple ↔ Peach ↔ Pear — đều là quả tròn).
+
+### Vấn đề Domain Shift (ảnh Google bị sai)
+
+⚠️ **Model hoạt động tốt trên Fruits-360 (98.82%) nhưng kém trên ảnh Google.** Nguyên nhân:
+- Fruits-360: nền trắng studio, ánh sáng chuẩn, quả ở giữa khung hình.
+- Ảnh Google: nền phức tạp (cây cối, bàn tay, bàn gỗ), ánh sáng đa dạng, nhiều góc chụp.
+- Model học "quả táo + nền trắng", không học "quả táo trong mọi bối cảnh".
+
+Cách khắc phục (xem chi tiết trong `PROJECT_DOCUMENTATION.md`):
+1. Augmentation thay background ngẫu nhiên trong lúc train.
+2. Thêm 10-20% ảnh Google vào tập train.
+3. Dùng CutOut, MixUp, CutMix.
+4. Test-Time Augmentation (TTA) khi predict.
 
 ---
 

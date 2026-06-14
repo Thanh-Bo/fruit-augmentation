@@ -1,5 +1,6 @@
 # Dataset (too large, download separately from Kaggle)
 fruits-360_100x100/
+fruits-360_3-body-problem/
 fruits-360/
 
 # Generated dataset (reproducible via prepare_dataset.py)

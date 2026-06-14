@@ -22,7 +22,8 @@ import matplotlib.pyplot as plt
 
 from config import (
     MODEL_PATH, CLASS_INDICES_PATH,
-    IMG_SIZE, NUM_CLASSES,
+    IMG_SIZE, BATCH_SIZE, NUM_CLASSES, EPOCHS, FINE_TUNE_EPOCHS,
+    PHASE1_LR, PHASE2_LR, LOW_CONFIDENCE_THRESHOLD,
     CLASS_NAMES,
     RESULTS_DIR,
     TEST_DIR
@@ -339,7 +340,7 @@ def get_sample_images():
     for c in sample_classes:
         folder_path = os.path.join(TEST_DIR, c)
         if os.path.exists(folder_path):
-            files = [f for f in os.listdir(folder_path) if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
+            files = [f for f in os.listdir(folder_path) if f.lower().endswith(('.png', '.jpg', '.jpeg', '.webp'))]
             if files:
                 samples[c] = os.path.join(folder_path, files[0])
     return samples
@@ -469,17 +470,21 @@ def render_sidebar():
         st.markdown("### Công nghệ sử dụng")
         st.markdown("""
         - Python & Streamlit
-        - TensorFlow / Keras (CNN)
-        - Data Augmentation (Pillow)
+        - TensorFlow / Keras
+        - MobileNetV2 Transfer Learning
+        - Data Augmentation
         """)
 
         st.markdown("---")
 
         st.markdown("### Dữ liệu & Mô hình")
-        st.markdown("""
+        st.markdown(f"""
         - **Dataset:** Fruits-360 (Kaggle)
         - **Kích thước ảnh gốc:** 100x100 pixel
-        - **Kích thước đầu vào:** 128x128 pixel
+        - **Kích thước đầu vào:** {IMG_SIZE}x{IMG_SIZE} pixel
+        - **Epochs:** {EPOCHS} + {FINE_TUNE_EPOCHS} fine-tune
+        - **Learning rate:** {PHASE1_LR} / {PHASE2_LR}
+        - **Mô hình:** MobileNetV2 Transfer Learning
         """)
 
         st.markdown("---")
@@ -499,7 +504,7 @@ def render_header():
     <div class="main-header">
         <h1>Ứng dụng tăng cường dữ liệu ảnh và phân loại trái cây</h1>
         <p>
-            Ứng dụng sử dụng mô hình CNN để phân loại ảnh trái cây.
+            Ứng dụng sử dụng MobileNetV2 Transfer Learning để phân loại ảnh trái cây.
             Dữ liệu được tăng cường bằng các kỹ thuật xoay, lật, zoom,
             dịch ảnh và thay đổi độ sáng nhằm cải thiện khả năng học
             của mô hình.
@@ -520,7 +525,7 @@ def render_stat_cards():
     with c2:
         st.markdown("""
         <div class="stat-card">
-            <p class="stat-value">CNN</p>
+            <p class="stat-value">MobileNetV2</p>
             <p class="stat-label">Mô hình phân loại</p>
         </div>
         """, unsafe_allow_html=True)
@@ -553,9 +558,9 @@ def render_tab_classification():
     )
 
     uploaded_file = st.file_uploader(
-        "Chọn ảnh trái cây để phân loại (JPG, JPEG, PNG)",
-        type=["jpg", "jpeg", "png"],
-        help="Hỗ trợ định dạng JPG, JPEG, PNG",
+        "Chọn ảnh trái cây để phân loại (JPG, JPEG, PNG, WEBP)",
+        type=["jpg", "jpeg", "png", "webp"],
+        help="Hỗ trợ định dạng JPG, JPEG, PNG, WEBP",
         key="classify_uploader",
         label_visibility="collapsed"
     )
@@ -659,6 +664,16 @@ def render_tab_classification():
             </div>
             """, unsafe_allow_html=True)
 
+            # Cảnh báo nếu confidence thấp
+            if confidence < LOW_CONFIDENCE_THRESHOLD:
+                st.markdown(f"""
+                <div class="warn-box">
+                    <b>⚠️ Mô hình không chắc chắn về dự đoán này.</b><br>
+                    Confidence ({confidence*100:.1f}%) thấp hơn ngưỡng an toàn ({LOW_CONFIDENCE_THRESHOLD*100:.0f}%).<br>
+                    Ảnh có thể khác phân phối Fruits-360 hoặc không thuộc 15 class được huấn luyện.
+                </div>
+                """, unsafe_allow_html=True)
+
         # Charts & Detailed Probabilities Grid side-by-side
         st.markdown("---")
         col_chart, col_table = st.columns([1, 1])
@@ -720,8 +735,10 @@ def render_tab_classification():
 
         st.markdown("---")
         st.caption(
-            "Lưu ý: Mô hình chỉ được huấn luyện để phân loại 15 loại trái cây kể trên. "
-            "Ảnh các loại trái cây ngoài danh sách này có thể cho kết quả phân loại không chính xác."
+            "Lưu ý: Mô hình chỉ được huấn luyện trên dataset Fruits-360 (nền trắng, studio). "
+            "Ảnh ngoài đời thực có thể cho kết quả không chính xác. "
+            "Mô hình chỉ phân loại được 15 loại trái cây kể trên — "
+            "ảnh các loại khác sẽ bị gán nhầm vào 1 trong 15 class."
         )
     else:
         st.markdown("""
@@ -747,8 +764,8 @@ def render_tab_augmentation():
 
     aug_file = st.file_uploader(
         "Tải lên một ảnh để xem các biến thể tăng cường",
-        type=["jpg", "jpeg", "png"],
-        help="Hỗ trợ định dạng JPG, JPEG, PNG",
+        type=["jpg", "jpeg", "png", "webp"],
+        help="Hỗ trợ định dạng JPG, JPEG, PNG, WEBP",
         key="augment_uploader"
     )
 
@@ -877,18 +894,18 @@ def render_tab_system_info():
 
     info_items = [
         ("Dữ liệu", "Fruits-360 (Kaggle)"),
-        ("Mô hình", "CNN (Convolutional Neural Network)"),
+        ("Mô hình", "MobileNetV2 Transfer Learning"),
         ("Kích thước ảnh đầu vào", f"{IMG_SIZE} x {IMG_SIZE} pixel"),
         ("Số lượng lớp", str(len(CLASS_NAMES))),
-        ("Định dạng ảnh hỗ trợ", "JPG, JPEG, PNG"),
-        ("Số epoch huấn luyện", "15 (có EarlyStopping)"),
-        ("Batch size", "32"),
+        ("Định dạng ảnh hỗ trợ", "JPG, JPEG, PNG, WEBP"),
+        ("Số epoch huấn luyện", f"{EPOCHS} + {FINE_TUNE_EPOCHS} fine-tune (có EarlyStopping)"),
+        ("Batch size", str(BATCH_SIZE)),
         (
             "Kỹ thuật tăng cường",
             "Xoay, Zoom, Dịch ảnh, Lật ngang, "
             "Thay đổi độ sáng, Kéo nghiêng"
         ),
-        ("Tối ưu hóa", "Adam (learning_rate=0.0005)"),
+        ("Tối ưu hóa", f"Adam (lr={PHASE1_LR} / {PHASE2_LR})"),
         ("Hàm mất mát", "Categorical Crossentropy"),
     ]
 

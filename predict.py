@@ -18,7 +18,7 @@ from tensorflow.keras.applications.mobilenet_v2 import preprocess_input
 
 from config import (
     MODEL_PATH, CLASS_INDICES_PATH,
-    IMG_SIZE,
+    IMG_SIZE, LOW_CONFIDENCE_THRESHOLD,
     SAMPLE_DIR
 )
 
@@ -31,9 +31,10 @@ def check_prerequisites():
     Kiểm tra các file cần thiết đã tồn tại chưa.
 
     Returns:
-        bool: True nếu tất cả OK.
+        tuple: (bool, str|None) — (all_ok, found_image_path or None)
     """
     all_ok = True
+    found_image = None
 
     if not os.path.exists(MODEL_PATH):
         print(f"[LỖI] Không tìm thấy model: {MODEL_PATH}")
@@ -45,14 +46,25 @@ def check_prerequisites():
         print("  Hãy chạy train_model.py trước.")
         all_ok = False
 
-    if not os.path.exists(IMAGE_PATH):
-        print(f"[LỖI] Không tìm thấy ảnh: {IMAGE_PATH}")
+    # Kiểm tra ảnh có tồn tại không (hỗ trợ nhiều định dạng)
+    image_extensions = ['.jpg', '.jpeg', '.png', '.webp']
+    for ext in image_extensions:
+        test_path = os.path.join(SAMPLE_DIR, f"test_image{ext}")
+        if os.path.exists(test_path):
+            found_image = test_path
+            break
+    # Cũng kiểm tra IMAGE_PATH gốc
+    if found_image is None and os.path.exists(IMAGE_PATH):
+        found_image = IMAGE_PATH
+
+    if found_image is None:
+        print(f"[LỖI] Không tìm thấy ảnh trong thư mục: {SAMPLE_DIR}/")
         print(f"  Hãy đặt ảnh muốn dự đoán vào thư mục {SAMPLE_DIR}/")
-        print(f"  và đặt tên là test_image.jpg")
+        print(f"  Tên file: test_image.jpg, test_image.jpeg, test_image.png, hoặc test_image.webp")
         print(f"  Hoặc sửa biến IMAGE_PATH trong predict.py")
         all_ok = False
 
-    return all_ok
+    return all_ok, found_image
 
 
 def load_model_and_classes():
@@ -138,18 +150,20 @@ def main():
     print("\n" + "#" * 60)
     print("#  DỰ ĐOÁN ẢNH TRÁI CÂY")
     print("#" * 60)
-    print(f"\nẢnh đầu vào: {IMAGE_PATH}")
 
     # Kiểm tra điều kiện tiên quyết
-    if not check_prerequisites():
+    all_ok, image_path = check_prerequisites()
+    if not all_ok:
         return
+
+    print(f"\nẢnh đầu vào: {image_path}")
 
     # Load model và class indices
     model, index_to_class = load_model_and_classes()
 
     # Tiền xử lý ảnh
     print(f"\nĐang tiền xử lý ảnh...")
-    img_array = preprocess_image(IMAGE_PATH)
+    img_array = preprocess_image(image_path)
     print(f"[OK] Ảnh đã được resize về {IMG_SIZE}x{IMG_SIZE} và chuẩn hóa.")
 
     # Dự đoán
@@ -165,19 +179,28 @@ def main():
     print(f"\n  >>> Loại trái cây: {predicted_class}")
     print(f"  >>> Độ tin cậy:    {confidence*100:.2f}%")
 
-    # In xác suất từng class
+    # Cảnh báo nếu confidence thấp
+    if confidence < LOW_CONFIDENCE_THRESHOLD:
+        print("\n" + "!" * 60)
+        print("[CẢNH BÁO] Mô hình không chắc chắn về dự đoán này!")
+        print(f"  Confidence ({confidence*100:.2f}%) < Ngưỡng ({LOW_CONFIDENCE_THRESHOLD*100:.0f}%)")
+        print("  Ảnh có thể khác phân phối Fruits-360 hoặc không thuộc 15 class.")
+        print("!" * 60)
+
+    # In top 5 xác suất cao nhất
     print("\n" + "-" * 60)
-    print("XÁC SUẤT CHI TIẾT TỪNG CLASS")
+    print("TOP 5 DỰ ĐOÁN")
     print("-" * 60)
-    print(f"{'Class':<15} {'Xác suất':<15} {'Bar'}")
+    print(f"{'Hạng':<6} {'Class':<15} {'Xác suất':<15} {'Bar'}")
     print("-" * 60)
 
-    for i in range(len(all_probs)):
-        class_name = index_to_class[i]
-        prob = all_probs[i]
+    top5_idx = np.argsort(all_probs)[-5:][::-1]
+    for rank, idx in enumerate(top5_idx, 1):
+        class_name = index_to_class[idx]
+        prob = all_probs[idx]
         bar = "█" * int(prob * 40)
         marker = " <-- DỰ ĐOÁN" if class_name == predicted_class else ""
-        print(f"{class_name:<15} {prob*100:>5.2f}%      {bar}{marker}")
+        print(f"  #{rank}   {class_name:<15} {prob*100:>5.2f}%      {bar}{marker}")
 
     print("\n[HOÀN THÀNH] Dự đoán kết thúc!")
 
